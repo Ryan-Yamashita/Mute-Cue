@@ -26,6 +26,26 @@ function Get-MuteCueWindowsScriptHostPath {
         -Description "Windows Script Host path"
 }
 
+function Get-MuteCueStartupTargetPath {
+    param([Parameter(Mandatory)][string]$LauncherPath)
+
+    $resolvedLauncherPath = Resolve-MuteCueStartupPathValue `
+        -Path $LauncherPath `
+        -Description "launcher path"
+
+    # Installed builds use the native MuteCue.exe host directly. Development
+    # launchers remain VBS files and continue to be hosted by wscript.exe.
+    if ([string]::Equals(
+        [System.IO.Path]::GetExtension($resolvedLauncherPath),
+        ".exe",
+        [System.StringComparison]::OrdinalIgnoreCase
+    )) {
+        return $resolvedLauncherPath
+    }
+
+    return Get-MuteCueWindowsScriptHostPath
+}
+
 function Get-MuteCueStartupShortcutPath {
     param(
         [string]$StartupDirectory = $([Environment]::GetFolderPath("Startup"))
@@ -43,6 +63,15 @@ function Get-MuteCueStartupArguments {
     $resolvedLauncherPath = Resolve-MuteCueStartupPathValue `
         -Path $LauncherPath `
         -Description "launcher path"
+
+    if ([string]::Equals(
+        [System.IO.Path]::GetExtension($resolvedLauncherPath),
+        ".exe",
+        [System.StringComparison]::OrdinalIgnoreCase
+    )) {
+        return "--startup"
+    }
+
     return ('"{0}" /startup' -f $resolvedLauncherPath)
 }
 
@@ -109,6 +138,12 @@ function Get-MuteCueStartupRegistration {
         -Description "Startup directory"
     $shortcutPath = Get-MuteCueStartupShortcutPath -StartupDirectory $resolvedStartupDirectory
     $scriptHostPath = Get-MuteCueWindowsScriptHostPath
+    $startupTargetPath = Get-MuteCueStartupTargetPath -LauncherPath $resolvedLauncherPath
+    $launcherIsExecutable = [string]::Equals(
+        [System.IO.Path]::GetExtension($resolvedLauncherPath),
+        ".exe",
+        [System.StringComparison]::OrdinalIgnoreCase
+    )
     $launcherExists = [System.IO.File]::Exists($resolvedLauncherPath)
     $exists = [System.IO.File]::Exists($shortcutPath)
 
@@ -118,6 +153,7 @@ function Get-MuteCueStartupRegistration {
         LauncherPath = $resolvedLauncherPath
         LauncherExists = $launcherExists
         WindowsScriptHostPath = $scriptHostPath
+        StartupTargetPath = $startupTargetPath
         Exists = $exists
         IsOwned = $false
         IsEnabled = $false
@@ -150,13 +186,13 @@ function Get-MuteCueStartupRegistration {
         $actualArguments = ([string]$details.Arguments).Trim()
         $trustedTarget = Test-MuteCueStartupPathEqual `
             -First ([string]$details.TargetPath) `
-            -Second $scriptHostPath
+            -Second $startupTargetPath
         $hasStartupMarker = [string]::Equals(
             $actualArguments,
             $expectedArguments,
             [System.StringComparison]::OrdinalIgnoreCase
         )
-        $hasLegacyArguments = [string]::Equals(
+        $hasLegacyArguments = -not $launcherIsExecutable -and [string]::Equals(
             $actualArguments,
             $legacyArguments,
             [System.StringComparison]::OrdinalIgnoreCase
@@ -237,8 +273,8 @@ function Set-MuteCueStartupRegistration {
     if (-not [System.IO.File]::Exists($state.LauncherPath)) {
         throw "The Mute Cue launcher was not found at '$($state.LauncherPath)'."
     }
-    if (-not [System.IO.File]::Exists($state.WindowsScriptHostPath)) {
-        throw "Windows Script Host was not found at '$($state.WindowsScriptHostPath)'."
+    if (-not [System.IO.File]::Exists($state.StartupTargetPath)) {
+        throw "The Mute Cue startup target was not found at '$($state.StartupTargetPath)'."
     }
     if ($state.IsCurrent) { return $state }
 
@@ -257,7 +293,7 @@ function Set-MuteCueStartupRegistration {
         try {
             $shell = New-Object -ComObject WScript.Shell
             $shortcut = $shell.CreateShortcut($temporaryPath)
-            $shortcut.TargetPath = $state.WindowsScriptHostPath
+            $shortcut.TargetPath = $state.StartupTargetPath
             $shortcut.Arguments = Get-MuteCueStartupArguments -LauncherPath $state.LauncherPath
             $shortcut.WorkingDirectory = [System.IO.Path]::GetDirectoryName($state.LauncherPath)
             $shortcut.WindowStyle = 7
@@ -274,7 +310,7 @@ function Set-MuteCueStartupRegistration {
 
         $temporaryDetails = Read-MuteCueStartupShortcut -ShortcutPath $temporaryPath
         $temporaryIsValid = (
-            (Test-MuteCueStartupPathEqual -First $temporaryDetails.TargetPath -Second $state.WindowsScriptHostPath) -and
+            (Test-MuteCueStartupPathEqual -First $temporaryDetails.TargetPath -Second $state.StartupTargetPath) -and
             [string]::Equals(
                 ([string]$temporaryDetails.Arguments).Trim(),
                 (Get-MuteCueStartupArguments -LauncherPath $state.LauncherPath),

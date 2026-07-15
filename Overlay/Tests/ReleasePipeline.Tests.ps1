@@ -10,13 +10,15 @@ function Assert-ReleasePipeline {
 $manifest = Get-Content -LiteralPath (Join-Path $overlayDirectory "MuteCue.ReleaseManifest.json") -Raw | ConvertFrom-Json
 Assert-ReleasePipeline ([string]$manifest.version -match '^\d+\.\d+\.\d+(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$') "The release version must be a safe semantic version."
 
-$builder = [IO.File]::ReadAllText((Join-Path $overlayDirectory "Build-MuteCueRelease.ps1"))
+$builder = [IO.File]::ReadAllText((Join-Path $overlayDirectory "Build-MuteCueExeRelease.ps1"))
 foreach ($requiredBuilderGate in @(
-    '-RequireSigning:$RequireSigning',
-    '-RequireDiscordPublicClient:$RequireDiscordPublicClient',
-    'discordPublicClientConfigured = $discordConfigured'
+    'dotnet publish $projectPath --configuration Release --runtime win-x64 --self-contained true',
+    'MuteCue.Accessibility.dll',
+    'MuteCue.DiscordPublicClient.json',
+    'Test-MuteCueExeInstaller.ps1',
+    'Inno Setup 6 is required'
 )) {
-    Assert-ReleasePipeline ($builder.Contains($requiredBuilderGate)) "The release builder is missing '$requiredBuilderGate'."
+    Assert-ReleasePipeline ($builder.Contains($requiredBuilderGate)) "The EXE release builder is missing '$requiredBuilderGate'."
 }
 
 $artifactValidator = [IO.File]::ReadAllText((Join-Path $overlayDirectory "Test-MuteCueReleaseArtifact.ps1"))
@@ -36,12 +38,14 @@ $workflow = [IO.File]::ReadAllText($workflowPath)
 foreach ($requiredWorkflowGate in @(
     'environment: production',
     'MUTE_CUE_DISCORD_APPLICATION_ID',
+    'choco install innosetup',
     'dotnet run --project',
-    '-RequireDiscordPublicClient',
+    'Build-MuteCueExeRelease.ps1',
+    'MuteCue-$env:RELEASE_VERSION-Setup.exe',
     'gh release create',
     '--verify-tag',
     '--notes-file',
-    'Important: unsigned Windows download'
+    'Important: unsigned Windows installer'
 )) {
     Assert-ReleasePipeline ($workflow.Contains($requiredWorkflowGate)) "The production workflow is missing '$requiredWorkflowGate'."
 }

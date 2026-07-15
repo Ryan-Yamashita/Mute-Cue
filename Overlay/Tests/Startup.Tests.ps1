@@ -124,6 +124,18 @@ try {
 
     $removeAgain = Disable-MuteCueStartupRegistration -LauncherPath $launcherPath -StartupDirectory $startupDirectory
     Assert-Startup (-not $removeAgain.Exists -and $removeAgain.State -eq "Disabled") "Removing an absent shortcut must be idempotent."
+
+    $executableLauncherPath = Join-Path $launcherDirectory "MuteCue.exe"
+    [System.IO.File]::WriteAllText($executableLauncherPath, "test executable host")
+    $executableEnabled = Enable-MuteCueStartupRegistration -LauncherPath $executableLauncherPath -StartupDirectory $startupDirectory
+    Assert-Startup (
+        $executableEnabled.IsCurrent -and
+        (Test-MuteCueStartupPathEqual -First $executableEnabled.TargetPath -Second $executableLauncherPath) -and
+        $executableEnabled.Arguments -eq "--startup"
+    ) "An installed Mute Cue executable must start directly with the --startup marker."
+
+    $executableRemoved = Disable-MuteCueStartupRegistration -LauncherPath $executableLauncherPath -StartupDirectory $startupDirectory
+    Assert-Startup (-not $executableRemoved.Exists -and $executableRemoved.State -eq "Disabled") "The executable startup shortcut was not removed."
 } finally {
     if ([System.IO.Directory]::Exists($temporaryRoot)) {
         [System.IO.Directory]::Delete($temporaryRoot, $true)

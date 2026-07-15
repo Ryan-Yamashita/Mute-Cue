@@ -50,15 +50,18 @@ jobs:
           dotnet build .\src\MuteCue.Desktop.Tests\MuteCue.Desktop.Tests.csproj --configuration Release --nologo
           dotnet run --project .\src\MuteCue.Desktop.Tests\MuteCue.Desktop.Tests.csproj --configuration Release --no-build --nologo
 
-      - name: Build and verify the exact unsigned archive
+      - name: Install the Windows installer compiler
+        shell: powershell
+        run: choco install innosetup --no-progress -y
+
+      - name: Build and verify the exact unsigned EXE installer
         shell: powershell
         env:
           DISCORD_APPLICATION_ID: ${{ secrets.MUTE_CUE_DISCORD_APPLICATION_ID }}
         run: |
-          .\Overlay\Build-MuteCueRelease.ps1 `
+          .\Overlay\Build-MuteCueExeRelease.ps1 `
             -OutputDirectory .\artifacts\release `
-            -DiscordApplicationId $env:DISCORD_APPLICATION_ID `
-            -RequireDiscordPublicClient
+            -DiscordApplicationId $env:DISCORD_APPLICATION_ID
 
       - name: Publish immutable GitHub release assets
         shell: powershell
@@ -66,16 +69,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ steps.release.outputs.version }}
         run: |
-          $archive = ".\artifacts\release\MuteCue-$env:RELEASE_VERSION.zip"
-          $checksum = "$archive.sha256"
+          $installer = ".\artifacts\release\MuteCue-$env:RELEASE_VERSION-Setup.exe"
+          $checksum = "$installer.sha256"
           $notes = @'
-          ## Important: unsigned Windows download
+          ## Important: unsigned Windows installer
 
           This community release is intentionally not Authenticode-signed. Windows may show an "unknown publisher" or SmartScreen warning. Download only from this official Mute Cue GitHub release, verify the included SHA-256 checksum, and inspect the source before running it if you are not comfortable accepting that risk.
           '@
           $notesPath = Join-Path $env:RUNNER_TEMP 'mute-cue-release-notes.md'
           [IO.File]::WriteAllText($notesPath, $notes, (New-Object Text.UTF8Encoding($false)))
-          gh release create $env:GITHUB_REF_NAME $archive $checksum `
+          gh release create $env:GITHUB_REF_NAME $installer $checksum `
             --verify-tag `
             --title "Mute Cue $env:RELEASE_VERSION (Unsigned)" `
             --notes-file $notesPath `

@@ -23,11 +23,15 @@ public partial class App : System.Windows.Application
             return;
         }
 
-        var settings = NativeSettingsDocument.Load(AppPaths.SettingsPath);
-        var startInTray = e.Args.Contains("--startup", StringComparer.OrdinalIgnoreCase) && settings.GetBoolean("StartInSystemTray", false);
-        var window = new MainWindow(settings, startInTray);
-        MainWindow = window;
-        window.Show();
+        ShutdownMode = ShutdownMode.OnExplicitShutdown;
+        if (!RuntimeLauncher.TryStart(e.Args, out var runtime, out var error))
+        {
+            System.Windows.MessageBox.Show(error, "Mute Cue", MessageBoxButton.OK, MessageBoxImage.Error);
+            Shutdown();
+            return;
+        }
+        runtime!.EnableRaisingEvents = true;
+        runtime.Exited += (_, _) => Dispatcher.Invoke(Shutdown);
     }
 
     protected override void OnExit(ExitEventArgs e)
