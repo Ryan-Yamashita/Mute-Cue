@@ -1,0 +1,220 @@
+param(
+    [Parameter(Mandatory)][string]$RuntimePath,
+    [Parameter(Mandatory)][string]$SessionToken,
+    [Parameter(Mandatory)][int]$ParentProcessId
+)
+
+$ErrorActionPreference = "Stop"
+$overlayDirectory = Split-Path -Parent $MyInvocation.MyCommand.Path
+$overlayPath = Join-Path $overlayDirectory "BeacnMuteOverlay.ps1"
+$commandPath = Join-Path $RuntimePath "commands"
+$snapshotPath = Join-Path $RuntimePath "snapshot.json"
+$workerInstanceId = [Guid]::NewGuid().ToString("N")
+$sequence = 0L
+$startedAt = [DateTime]::UtcNow
+$lastWriteUtc = [DateTime]::MinValue
+$lastPayloadSignature = ""
+$stopping = $false
+$scanTask = $null
+$scanStartedUtc = [DateTime]::MinValue
+$lastCompletedStates = @()
+$maximumScanDurationMilliseconds = 30000
+$skipScannerShutdown = $false
+$fatalErrorPath = Join-Path $RuntimePath "worker-error.log"
+$lifecyclePath = Join-Path $RuntimePath "worker-lifecycle.log"
+. (Join-Path $overlayDirectory "MuteCue.AtomicFile.ps1")
+
+trap {
+    try {
+        $errorText = "{0:o} {1}{2}{3}" -f [DateTime]::UtcNow, $_.Exception.ToString(), [Environment]::NewLine, $_.ScriptStackTrace
+        [IO.File]::AppendAllText($fatalErrorPath, $errorText + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
+    } catch {}
+    exit 1
+}
+
+function Get-EmbeddedSource {
+    param([Parameter(Mandatory)][string]$VariableName)
+
+    $text = [IO.File]::ReadAllText($overlayPath)
+    $pattern = '(?ms)^\$' + [regex]::Escape($VariableName) + '\s*=\s*@"\r?\n(.*?)\r?\n"@\s*$'
+    $match = [regex]::Match($text, $pattern)
+    if (-not $match.Success) { throw "Embedded source '$VariableName' was not found." }
+    return $match.Groups[1].Value
+}
+
+function Write-AtomicJson {
+    param([Parameter(Mandatory)][object]$Value)
+
+    $json = $Value | ConvertTo-Json -Depth 8 -Compress
+    Write-MuteCueAtomicText -Path $snapshotPath -Text $json -MaximumAttempts 10
+}
+
+function Test-ParentRunning {
+    try { return $null -ne (Get-Process -Id $ParentProcessId -ErrorAction Stop) } catch {
+        try { [IO.File]::AppendAllText($lifecyclePath, ("{0:o} parent check failed: {1}{2}" -f [DateTime]::UtcNow, $_.Exception.Message, [Environment]::NewLine)) } catch {}
+        return $false
+    }
+}
+
+function Invoke-WorkerCommand {
+    param([Parameter(Mandatory)][object]$Command)
+
+    if ([int]$Command.SchemaVersion -ne 1 -or [string]$Command.SessionToken -ne $SessionToken) { return }
+    $data = $Command.Data
+    switch ([string]$Command.Type) {
+        "Discovery" { [BeacnMuteOverlay.BeacnAppScanner]::RequestDiscovery() }
+        "GeometryRefresh" { [BeacnMuteOverlay.BeacnAppScanner]::RequestGeometryRefresh() }
+        "FaderRefresh" {
+            [BeacnMuteOverlay.BeacnAppScanner]::RequestFaderRefresh([string]$data.Name, [string]$data.Mode)
+        }
+        "UrgentFaderRefresh" {
+            [BeacnMuteOverlay.BeacnAppScanner]::RequestUrgentFaderRefresh([string]$data.Name, [string]$data.Mode)
+        }
+        "RenderedRefresh" {
+            [BeacnMuteOverlay.BeacnAppScanner]::RequestRenderedFaderRefresh([string]$data.Name, [string]$data.Mode)
+        }
+        "PointRefresh" {
+            $x = [double]$data.X
+            $y = [double]$data.Y
+            $target = [BeacnMuteOverlay.BeacnAppScanner]::ResolveCachedActionAtPoint($x, $y)
+            if ($null -ne $target) {
+                [BeacnMuteOverlay.BeacnAppScanner]::RequestRenderedFaderRefresh($target.Name, $target.Mode)
+            }
+        }
+        "HardwareRefresh" {
+            [BeacnMuteOverlay.BeacnAppScanner]::RequestHardwareRefresh(
+                [string]$data.PreferredName,
+                [string]$data.Mode,
+                [int]$data.Position,
+                [long]$data.RequestId,
+                [long]$data.MappingGeneration,
+                [bool]$data.MappingConfident
+            )
+        }
+        "Shutdown" { $script:stopping = $true }
+    }
+}
+
+Add-Type -AssemblyName PresentationCore
+Add-Type -AssemblyName WindowsBase
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+. (Join-Path $overlayDirectory "MuteCue.AccessibilityRuntime.ps1")
+$accessibilitySource = Get-EmbeddedSource -VariableName "discordScannerSource"
+$accessibilityRuntime = Import-MuteCueAccessibilityRuntime `
+    -OverlayDirectory $overlayDirectory `
+    -SourceText $accessibilitySource `
+    -AllowSourceFallback:(Test-MuteCueAccessibilitySourceFallbackAllowed -OverlayDirectory $overlayDirectory)
+. (Join-Path $overlayDirectory "BeacnAdapter.ps1")
+
+[void](New-Item -ItemType Directory -Path $commandPath -Force)
+[IO.File]::AppendAllText($lifecyclePath, ("{0:o} worker={1} parent={2} initialized{3}" -f [DateTime]::UtcNow, $PID, $ParentProcessId, [Environment]::NewLine))
+$configurationState = New-BeacnAdapterState
+[void](Update-BeacnScannerAdapterConfiguration -Adapter $configurationState -Force)
+[BeacnMuteOverlay.BeacnAppScanner]::RequestDiscovery()
+
+try {
+    while (-not $stopping -and (Test-ParentRunning)) {
+        # Native bounds polling is intentionally independent from ScanAsync. It can
+        # fence a scan that was already inside a slow JUCE provider call when the
+        # user moved the BEACN window.
+        try { [void][BeacnMuteOverlay.BeacnAppScanner]::PollWindowGeometry() } catch {}
+        foreach ($file in @(Get-ChildItem -LiteralPath $commandPath -Filter "*.json" -File -ErrorAction SilentlyContinue | Sort-Object Name)) {
+            try {
+                $command = Get-Content -LiteralPath $file.FullName -Raw | ConvertFrom-Json
+                Invoke-WorkerCommand -Command $command
+            } catch {} finally {
+                Remove-Item -LiteralPath $file.FullName -Force -ErrorAction SilentlyContinue
+            }
+        }
+        try { [void](Update-BeacnScannerAdapterConfiguration -Adapter $configurationState) } catch {}
+
+        if ($null -eq $scanTask) {
+            $scanStartedUtc = [DateTime]::UtcNow
+            $scanTask = [BeacnMuteOverlay.BeacnAppScanner]::ScanAsync()
+        }
+        if ($scanTask.IsCompleted) {
+            $completedStates = @($scanTask.GetAwaiter().GetResult() | Sort-Object Order)
+            if ($completedStates.Count -gt 0 -or $lastCompletedStates.Count -eq 0) {
+                $lastCompletedStates = $completedStates
+            }
+            $scanTask = $null
+            $scanStartedUtc = [DateTime]::MinValue
+        }
+
+        $sequence++
+        $now = [DateTime]::UtcNow
+        $scanInProgress = $null -ne $scanTask
+        $scanInProgressMilliseconds = if ($scanInProgress -and $scanStartedUtc -ne [DateTime]::MinValue) {
+            [Math]::Max(0, ($now - $scanStartedUtc).TotalMilliseconds)
+        } else {
+            0
+        }
+        $snapshot = [ordered]@{
+            SchemaVersion = 1
+            SessionToken = $SessionToken
+            WorkerInstanceId = $workerInstanceId
+            WorkerProcessId = $PID
+            Sequence = $sequence
+            StartedAtUtc = $startedAt.ToString("o")
+            CapturedAtUtc = $now.ToString("o")
+            ScannerStatus = [string][BeacnMuteOverlay.BeacnAppScanner]::CompatibilityStatus
+            ScannerDetail = [string][BeacnMuteOverlay.BeacnAppScanner]::CompatibilityDetail
+            AccessibilityRuntimeMode = [string]$accessibilityRuntime.Mode
+            AccessibilityRuntimeVersion = [string]$accessibilityRuntime.AssemblyVersion
+            AccessibilityRuntimeContract = [int]$accessibilityRuntime.ContractVersion
+            AccessibilityRuntimeIntegrityVerified = [bool]$accessibilityRuntime.IntegrityVerified
+            BeacnVersion = [string][BeacnMuteOverlay.BeacnAppScanner]::BeacnVersion
+            CompatibilityProfile = [string]$configurationState.CompatibilityProfileId
+            CompatibilityProfileVerified = [bool]$configurationState.CompatibilityProfileVerified
+            LayoutFingerprint = [string][BeacnMuteOverlay.BeacnAppScanner]::LayoutFingerprint
+            DiscoveryGeneration = [int][BeacnMuteOverlay.BeacnAppScanner]::DiscoveryGeneration
+            HasPendingChanges = [bool][BeacnMuteOverlay.BeacnAppScanner]::HasPendingChanges
+            GeometryRefreshInProgress = [bool][BeacnMuteOverlay.BeacnAppScanner]::GeometryRefreshInProgress
+            GeometryRefreshRemaining = [int][BeacnMuteOverlay.BeacnAppScanner]::GeometryRefreshRemaining
+            NativeGeometryGeneration = [long][BeacnMuteOverlay.BeacnAppScanner]::NativeGeometryGeneration
+            ScanInProgress = [bool]$scanInProgress
+            ScanInProgressMilliseconds = [double]$scanInProgressMilliseconds
+            LastScanMilliseconds = [double][BeacnMuteOverlay.BeacnAppScanner]::LastScanMilliseconds
+            DiagnosticSummary = [string][BeacnMuteOverlay.BeacnAppScanner]::DiagnosticSummary
+            LastActionEventSummary = [string][BeacnMuteOverlay.BeacnAppScanner]::LastActionEventSummary
+            HardwareResultSequence = [long][BeacnMuteOverlay.BeacnAppScanner]::HardwareResultSequence
+            LastHardwareChangedName = [string][BeacnMuteOverlay.BeacnAppScanner]::LastHardwareChangedName
+            LastHardwarePreferredName = [string][BeacnMuteOverlay.BeacnAppScanner]::LastHardwarePreferredName
+            LastHardwareChangedMode = [string][BeacnMuteOverlay.BeacnAppScanner]::LastHardwareChangedMode
+            LastHardwarePosition = [int][BeacnMuteOverlay.BeacnAppScanner]::LastHardwarePosition
+            LastHardwareRequestId = [long][BeacnMuteOverlay.BeacnAppScanner]::LastHardwareRequestId
+            LastHardwareMappingGeneration = [long][BeacnMuteOverlay.BeacnAppScanner]::LastHardwareMappingGeneration
+            LastHardwareRefreshSummary = [string][BeacnMuteOverlay.BeacnAppScanner]::LastHardwareRefreshSummary
+            States = $lastCompletedStates
+        }
+        $payloadSignature = ($snapshot | ConvertTo-Json -Depth 8 -Compress) `
+            -replace '"Sequence":\d+,', '' `
+            -replace '"CapturedAtUtc":"[^"]+",', '' `
+            -replace '"ScanInProgress":(?:true|false),', '' `
+            -replace '"ScanInProgressMilliseconds":[^,]+,', ''
+        if ($payloadSignature -ne $lastPayloadSignature -or ($now - $lastWriteUtc).TotalMilliseconds -ge 250) {
+            Write-AtomicJson -Value $snapshot
+            $lastPayloadSignature = $payloadSignature
+            $lastWriteUtc = $now
+        }
+
+        if ($scanInProgressMilliseconds -ge $maximumScanDurationMilliseconds) {
+            try {
+                [IO.File]::AppendAllText(
+                    $lifecyclePath,
+                    ("{0:o} scan exceeded {1} ms; recycling worker without discarding the last snapshot{2}" -f `
+                        [DateTime]::UtcNow, [int]$scanInProgressMilliseconds, [Environment]::NewLine)
+                )
+            } catch {}
+            $skipScannerShutdown = $true
+            [Environment]::Exit(2)
+        }
+        Start-Sleep -Milliseconds $(if ([bool]$snapshot.HasPendingChanges) { 15 } else { 60 })
+    }
+} finally {
+    try { [IO.File]::AppendAllText($lifecyclePath, ("{0:o} worker stopping; requested={1}; parentRunning={2}{3}" -f [DateTime]::UtcNow, [int]$stopping, [int](Test-ParentRunning), [Environment]::NewLine)) } catch {}
+    if (-not $skipScannerShutdown) {
+        try { [BeacnMuteOverlay.BeacnAppScanner]::Shutdown() } catch {}
+    }
+}

@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security reports
+    url: ../../security/advisories/new
+    about: Use GitHub private vulnerability reporting after it has been enabled for this repository.

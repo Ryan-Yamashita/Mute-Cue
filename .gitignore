@@ -1,0 +1,33 @@
+# Local runtime state and diagnostics
+Overlay/settings.json
+Overlay/settings.json.bak
+Overlay/.mute-cue.lock
+Overlay/.mute-cue-error.log*
+Overlay/.*.log
+Overlay/.launch-*.log
+
+# Per-user credentials (DPAPI-encrypted, but still private and machine-specific)
+Overlay/.discord-client-secret.dat
+Overlay/.discord-authorization.dat
+
+# Packet captures can contain unrelated USB traffic and are very large
+*.pcap
+*.pcapng
+
+# Local BEACN installation and personal profile snapshots are not source code
+Program/
+Settings/
+
+# Signing credentials and private keys must never enter source control
+*.pfx
+*.p12
+*.key
+Overlay/dist-signing-test/
+
+# Temporary/editor artifacts
+*.tmp
+*.TMP
+*~
+.vs/
+.vscode/
+Overlay/dist/

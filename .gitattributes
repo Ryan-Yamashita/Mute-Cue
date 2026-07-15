@@ -1,0 +1,11 @@
+# Keep Windows scripts usable after cloning on any Windows computer.
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
+*.vbs text eol=crlf
+
+# Treat release and graphic assets as binary.
+*.dll binary
+*.png binary
+*.zip binary
+*.pcap binary
+*.pcapng binary

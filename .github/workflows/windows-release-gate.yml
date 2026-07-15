@@ -1,0 +1,21 @@
+name: Windows verification
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Run the full Mute Cue test suite
+        shell: powershell
+        run: .\Overlay\Tests\Run-All.ps1

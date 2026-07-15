@@ -1,0 +1,59 @@
+name: Bug report
+description: Tell us about a reproducible problem with Mute Cue.
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please remove private information before submitting. Do not attach settings files, packet captures, Discord authorization data, certificates, or BEACN profile exports.
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version and display scaling
+      placeholder: Windows 11 23H2, 150%
+    validations:
+      required: true
+  - type: input
+    id: beacn
+    attributes:
+      label: BEACN app version and device
+      placeholder: BEACN App 1.2.x, Mix Create
+    validations:
+      required: true
+  - type: dropdown
+    id: usbpcap
+    attributes:
+      label: USBPcap installed?
+      options:
+        - Yes
+        - No
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: Include the affected fader and whether you used the desktop app, hardware, or a BEACN Knob Mute hotkey.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual result
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: BEACN diagnostics
+      description: Paste the result of Copy BEACN diagnostics. Review it before submitting.
+      render: text
+    validations:
+      required: true

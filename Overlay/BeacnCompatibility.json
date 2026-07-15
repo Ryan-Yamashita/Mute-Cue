@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "profiles": [
+    {
+      "id": "beacn-1.2",
+      "minimumVersion": "1.2.0",
+      "maximumVersionExclusive": "1.3.0",
+      "verified": true,
+      "allActionLabels": ["Knob: Mute to All"],
+      "audienceActionLabels": ["Mute to Audience"]
+    },
+    {
+      "id": "structural-fallback",
+      "minimumVersion": "0.0.0",
+      "maximumVersionExclusive": "999.0.0",
+      "verified": false,
+      "allActionLabels": ["Knob: Mute to All"],
+      "audienceActionLabels": ["Mute to Audience"]
+    }
+  ]
+}
