@@ -2,6 +2,8 @@
 
 Mute Cue is a Windows overlay that shows BEACN Mix Create and Discord mute states without covering the screen with mixer controls.
 
+Mute Cue is available under the [MIT License](LICENSE).
+
 > **Community beta.** Mute Cue is actively being tested with the BEACN desktop app. Please review the supported setup below and report reproducible problems using the included diagnostics rather than sharing settings, packet captures, or credentials.
 
 ## Requirements
