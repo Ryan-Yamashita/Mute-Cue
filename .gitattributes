@@ -1,5 +1,6 @@
-# Keep Windows scripts usable after cloning on any Windows computer.
-*.ps1 text eol=crlf
+# Keep generated-component source bytes stable after cloning on any platform.
+# PowerShell runs these UTF-8/LF scripts normally on Windows.
+*.ps1 text eol=lf
 *.cmd text eol=crlf
 *.vbs text eol=crlf
 
