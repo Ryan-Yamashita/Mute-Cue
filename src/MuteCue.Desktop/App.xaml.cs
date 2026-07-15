@@ -31,7 +31,7 @@ public partial class App : System.Windows.Application
             if (shutdownRequested)
             {
                 SignalRunningInstanceToStop();
-                WaitForRunningInstanceToStop();
+                WaitForRunningInstanceToStop(TimeSpan.FromSeconds(15));
                 if (_ownsInstance)
                 {
                     LegacyInstallMigration.CleanupPerUserInstallation();
@@ -41,8 +41,11 @@ public partial class App : System.Windows.Application
             }
 
             SignalRunningInstanceToActivate();
-            Shutdown();
-            return;
+            if (!WaitForRunningInstanceToStop(TimeSpan.FromSeconds(3)))
+            {
+                Shutdown();
+                return;
+            }
         }
 
         if (shutdownRequested)
@@ -56,7 +59,7 @@ public partial class App : System.Windows.Application
         _shutdownEvent = new EventWaitHandle(false, EventResetMode.AutoReset, AppChannel.ShutdownEventName);
         _shutdownRegistration = ThreadPool.RegisterWaitForSingleObject(
             _shutdownEvent,
-            (_, _) => Dispatcher.BeginInvoke(() => Shutdown()),
+            (_, _) => Dispatcher.BeginInvoke(ExitApplication),
             null,
             Timeout.Infinite,
             executeOnlyOnce: true);
@@ -150,11 +153,22 @@ public partial class App : System.Windows.Application
         _activationRequested = true;
     }
 
-    private void WaitForRunningInstanceToStop()
+    private void ExitApplication()
+    {
+        if (MainWindow is MuteCue.Desktop.MainWindow settingsWindow)
+        {
+            settingsWindow.ExitApplication();
+            return;
+        }
+
+        Shutdown();
+    }
+
+    private bool WaitForRunningInstanceToStop(TimeSpan timeout)
     {
         try
         {
-            _ownsInstance = _instanceMutex?.WaitOne(TimeSpan.FromSeconds(15)) == true;
+            _ownsInstance = _instanceMutex?.WaitOne(timeout) == true;
         }
         catch (AbandonedMutexException)
         {
@@ -162,5 +176,7 @@ public partial class App : System.Windows.Application
             // now owns it and can allow the build to proceed safely.
             _ownsInstance = true;
         }
+
+        return _ownsInstance;
     }
 }

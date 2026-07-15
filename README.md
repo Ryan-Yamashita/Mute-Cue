@@ -35,7 +35,7 @@ The release is a self-contained native .NET WPF application. Users do not need t
 - Native support for BEACN Knob Mute hotkeys, including live mapping-file reloads
 - Native Discord local RPC authorization and mute/deafen monitoring
 - Per-user encrypted Discord authorization using Windows DPAPI
-- System tray, run-on-startup, overlay positioning, opacity, and size controls
+- Branded system tray and taskbar icons, close-to-tray behavior, run-on-startup, overlay positioning, opacity, and size controls
 - Separate Stable and Dev channels for safe local testing
 
 BEACN's displayed action rows remain authoritative. Mouse clicks, mapped hotkeys, and USB packets request immediate targeted reads and may show a short guarded prediction only when the fader and hardware mapping are already known.

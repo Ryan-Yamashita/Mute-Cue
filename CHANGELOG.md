@@ -17,6 +17,8 @@ All notable changes to Mute Cue are recorded here.
 - Added a native-only installer gate that rejects PowerShell files and legacy runtime directories.
 - Added a GitHub release gate requiring tagged commits to already be contained in `main`.
 - Reopening an already-running app now restores its settings window from the system tray.
+- Added the icon-only Mute Cue logo to the native taskbar window and system tray.
+- Restored the Close to system tray setting; normal close now follows it, while tray Exit fully terminates the app and immediate relaunch waits safely for shutdown cleanup.
 - Removed the redundant Discord UI Automation polling loop that could grow memory during long sessions.
 - Native upgrades now remove obsolete launcher/runtime files and repair an existing startup shortcut.
 - Stable now installs under `C:\Program Files\Mute Cue`; the one-time migration removes the previous per-user application copy while preserving user data.

@@ -1,9 +1,11 @@
 using System;
 using System.ComponentModel;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Threading;
+using Drawing = System.Drawing;
 using Forms = System.Windows.Forms;
 using MuteCue.Desktop.Services;
 using MuteCue.Desktop.NativeRuntime;
@@ -14,11 +16,14 @@ public partial class MainWindow : Window
 {
     private readonly NativeSettingsDocument _settings;
     private readonly NativeMuteCueRuntime _runtime;
+    private readonly Drawing.Icon _trayIconImage;
     private readonly Forms.NotifyIcon _trayIcon;
     private readonly List<FaderSelectionRow> _faderRows = [];
     private readonly DispatcherTimer _faderSaveTimer;
     private bool _isLoading = true;
     private bool _allowClose;
+    private bool _shutdownRequested;
+    private bool _shutdownPrepared;
 
     public MainWindow(NativeSettingsDocument settings, NativeMuteCueRuntime runtime, bool startInTray)
     {
@@ -29,7 +34,8 @@ public partial class MainWindow : Window
         _runtime = runtime;
         _runtime.DiscordStatusChanged += Runtime_OnDiscordStatusChanged;
         _runtime.BeacnStatusChanged += Runtime_OnBeacnStatusChanged;
-        _trayIcon = CreateTrayIcon();
+        _trayIconImage = LoadApplicationIcon();
+        _trayIcon = CreateTrayIcon(_trayIconImage);
         _faderSaveTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(120) };
         _faderSaveTimer.Tick += (_, _) =>
         {
@@ -47,23 +53,38 @@ public partial class MainWindow : Window
         }
     }
 
-    private Forms.NotifyIcon CreateTrayIcon()
+    private Forms.NotifyIcon CreateTrayIcon(Drawing.Icon applicationIcon)
     {
         var icon = new Forms.NotifyIcon
         {
-            Icon = System.Drawing.SystemIcons.Application,
+            Icon = applicationIcon,
             Text = AppChannel.ProductName,
             Visible = true,
         };
         icon.DoubleClick += (_, _) => RestoreFromTray();
         icon.ContextMenuStrip = new Forms.ContextMenuStrip();
         icon.ContextMenuStrip.Items.Add($"Show {AppChannel.ProductName}", null, (_, _) => RestoreFromTray());
-        icon.ContextMenuStrip.Items.Add("Exit", null, (_, _) =>
-        {
-            _allowClose = true;
-            Close();
-        });
+        icon.ContextMenuStrip.Items.Add("Exit", null, (_, _) => ExitApplication());
         return icon;
+    }
+
+    private static Drawing.Icon LoadApplicationIcon()
+    {
+        var resource = System.Windows.Application.GetResourceStream(
+            new Uri("pack://application:,,,/Assets/mute-cue-tray.png", UriKind.Absolute))
+            ?? throw new InvalidOperationException("The Mute Cue application icon is missing.");
+        using var stream = resource.Stream;
+        using var bitmap = new Drawing.Bitmap(stream);
+        var nativeIcon = bitmap.GetHicon();
+        try
+        {
+            using var borrowedIcon = Drawing.Icon.FromHandle(nativeIcon);
+            return (Drawing.Icon)borrowedIcon.Clone();
+        }
+        finally
+        {
+            DestroyIcon(nativeIcon);
+        }
     }
 
     private void LoadSettings()
@@ -73,6 +94,7 @@ public partial class MainWindow : Window
         OverlaySizeValue.Text = $"{OverlaySize.Value:0}px";
         OverlayOpacityValue.Text = $"{OverlayOpacity.Value:P0}";
         ClickThrough.IsChecked = _settings.GetBoolean("ClickThrough", false);
+        CloseToTray.IsChecked = _settings.GetBoolean("CloseToSystemTray", false);
         RunOnStartup.IsChecked = StartupRegistrationService.IsRegistered();
         RunOnStartup.IsEnabled = StartupRegistrationService.IsSupported;
         RunOnStartupLabel.Text = StartupRegistrationService.IsSupported ? "Run on startup" : "Run on startup (Stable only)";
@@ -125,7 +147,7 @@ public partial class MainWindow : Window
         SaveSettings();
     }
 
-    private void Close_OnClick(object sender, RoutedEventArgs e) => HideToTray();
+    private void Close_OnClick(object sender, RoutedEventArgs e) => Close();
 
     private void ConnectDiscord_OnClick(object sender, RoutedEventArgs e) => _runtime.ConnectDiscord();
 
@@ -172,6 +194,7 @@ public partial class MainWindow : Window
         _settings.SetInteger("Size", (int)Math.Round(OverlaySize.Value));
         _settings.SetDouble("Opacity", OverlayOpacity.Value);
         _settings.SetBoolean("ClickThrough", ClickThrough.IsChecked == true);
+        _settings.SetBoolean("CloseToSystemTray", CloseToTray.IsChecked == true);
         _settings.SetBoolean("DiscordMicDetect", DiscordMicDetect.IsChecked == true);
         _settings.SetBoolean("DiscordDeafenDetect", DiscordDeafenDetect.IsChecked == true);
         _settings.SetBoolean("StartInSystemTray", StartInTray.IsChecked == true && RunOnStartup.IsChecked == true);
@@ -263,13 +286,34 @@ public partial class MainWindow : Window
 
     protected override void OnClosing(CancelEventArgs e)
     {
-        if (!_allowClose)
+        if (WindowCloseBehavior.ShouldHideToTray(
+            closeToSystemTray: CloseToTray.IsChecked == true,
+            explicitExitRequested: _allowClose))
         {
             e.Cancel = true;
             HideToTray();
             return;
         }
 
+        _allowClose = true;
+        PrepareForShutdown();
+        if (!_shutdownRequested)
+        {
+            _shutdownRequested = true;
+            Dispatcher.BeginInvoke(() => System.Windows.Application.Current.Shutdown());
+        }
+
+        base.OnClosing(e);
+    }
+
+    private void PrepareForShutdown()
+    {
+        if (_shutdownPrepared)
+        {
+            return;
+        }
+
+        _shutdownPrepared = true;
         if (_faderSaveTimer.IsEnabled)
         {
             _faderSaveTimer.Stop();
@@ -277,10 +321,17 @@ public partial class MainWindow : Window
         }
         _trayIcon.Visible = false;
         _trayIcon.Dispose();
+        _trayIconImage.Dispose();
         _runtime.DiscordStatusChanged -= Runtime_OnDiscordStatusChanged;
         _runtime.BeacnStatusChanged -= Runtime_OnBeacnStatusChanged;
         _runtime.SaveOverlayPosition();
-        base.OnClosing(e);
+    }
+
+    internal void ExitApplication()
+    {
+        _allowClose = true;
+        _shutdownRequested = true;
+        System.Windows.Application.Current.Shutdown();
     }
 
     private void HideToTray()
@@ -312,4 +363,8 @@ public partial class MainWindow : Window
     }
 
     private sealed record FaderSelectionRow(string Source, System.Windows.Controls.CheckBox AllToggle, System.Windows.Controls.CheckBox AudienceToggle);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool DestroyIcon(IntPtr handle);
 }

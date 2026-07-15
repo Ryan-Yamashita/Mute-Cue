@@ -19,6 +19,9 @@ try
     Assert(AppChannel.DataDirectoryName == (expectedDevelopmentChannel ? "MuteCue-Dev" : "MuteCue"), "The data directory must identify the compiled channel.");
     Assert(AppChannel.ActivationEventName.Contains(expectedDevelopmentChannel ? "MuteCue.Dev.ActivateSettings" : "MuteCue.ActivateSettings", StringComparison.Ordinal), "Each compiled channel must expose its own settings-activation event.");
     Assert(StartupRegistrationService.IsSupported == !expectedDevelopmentChannel, "Only Stable builds may register themselves to run on startup.");
+    Assert(WindowCloseBehavior.ShouldHideToTray(closeToSystemTray: true, explicitExitRequested: false), "A normal close must hide only when close-to-tray is enabled.");
+    Assert(!WindowCloseBehavior.ShouldHideToTray(closeToSystemTray: false, explicitExitRequested: false), "A normal close must exit when close-to-tray is disabled.");
+    Assert(!WindowCloseBehavior.ShouldHideToTray(closeToSystemTray: true, explicitExitRequested: true), "Tray Exit must always bypass close-to-tray behavior.");
     Assert(AppPaths.DataDirectory.EndsWith(AppChannel.DataDirectoryName, StringComparison.OrdinalIgnoreCase), "Application paths must use the compiled channel identity.");
     Assert(AppPaths.DiscordAuthorizationPath.StartsWith(AppPaths.DataDirectory, StringComparison.OrdinalIgnoreCase), "Discord authorization must remain inside the current channel's data directory.");
     Assert(NativeMuteCueRuntime.VerifiedAllActionLabels.SequenceEqual(["Knob: Mute to All"]), "The native scanner must use BEACN's verified All action label.");
@@ -163,11 +166,13 @@ try
     Assert(!lockedMapper.PageKnown && lockedMapper.MappingGeneration == 1, "Reordering or relocking BEACN faders must invalidate calibrated page state.");
 
     settings.SetBoolean("StartInSystemTray", true);
+    settings.SetBoolean("CloseToSystemTray", true);
     settings.SetString("BeacnAllFaderNames", "Mic,System");
     settings.Save();
     var written = await File.ReadAllTextAsync(settingsPath);
     Assert(written.Contains("must-survive", StringComparison.Ordinal), "Unknown settings must survive native writes.");
     Assert(NativeSettingsDocument.Load(settingsPath).GetBoolean("StartInSystemTray", false), "Saved settings must round-trip.");
+    Assert(NativeSettingsDocument.Load(settingsPath).GetBoolean("CloseToSystemTray", false), "Close-to-tray settings must round-trip.");
     Assert(FaderSourceParser.Merge("Mic,System", "System,Chat").SequenceEqual(["Mic", "System", "Chat"]), "Merged fader sources must preserve display order without duplicates.");
     Assert(
         FaderSourceParser.MergeWithDefaults("Mic").SequenceEqual(["Mic", "System", "Link In", "Game", "Link 2 In", "Chat", "Hardware"]),

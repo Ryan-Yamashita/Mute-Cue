@@ -35,7 +35,8 @@
 - Confirm the first machine-wide update removes the obsolete `%LOCALAPPDATA%\Programs\MuteCue` application directory and per-user uninstall entry.
 - Confirm settings and authorization survive an update and uninstall preserves user data by default.
 - Confirm no .NET or PowerShell installation is required by the application.
-- Confirm startup registration and start-in-tray behavior.
+- Confirm startup registration, start-in-tray behavior, close-to-tray behavior, tray Exit, and immediate reopening after a full exit.
+- Confirm the icon-only Mute Cue logo appears in both the taskbar and system tray.
 - Confirm Windows unsigned-publisher messaging is accurately disclosed.
 
 ## GitHub promotion

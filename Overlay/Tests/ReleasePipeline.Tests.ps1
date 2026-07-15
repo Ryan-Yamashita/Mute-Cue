@@ -89,9 +89,16 @@ foreach ($requiredInstallerTestGate in @('/NOICONS', '/MUTECUE-SMOKE-TEST')) {
 }
 
 $nativeApp = [IO.File]::ReadAllText((Join-Path $repositoryRoot "src\MuteCue.Desktop\App.xaml.cs"))
-foreach ($requiredActivationGate in @('ActivationEventName', 'SignalRunningInstanceToActivate', 'RestoreFromExternalLaunch', 'RepairExistingRegistration')) {
+foreach ($requiredActivationGate in @('ActivationEventName', 'SignalRunningInstanceToActivate', 'WaitForRunningInstanceToStop(TimeSpan.FromSeconds(3))', 'RestoreFromExternalLaunch', 'RepairExistingRegistration')) {
     Assert-ReleasePipeline ($nativeApp.Contains($requiredActivationGate)) "The native app is missing the existing-instance activation gate '$requiredActivationGate'."
 }
+
+$nativeWindow = [IO.File]::ReadAllText((Join-Path $repositoryRoot "src\MuteCue.Desktop\MainWindow.xaml.cs"))
+foreach ($requiredWindowGate in @('CloseToSystemTray', 'WindowCloseBehavior.ShouldHideToTray', 'ExitApplication()', 'Application.Current.Shutdown()', 'mute-cue-tray.png')) {
+    Assert-ReleasePipeline ($nativeWindow.Contains($requiredWindowGate)) "The native window lifecycle or application icon is missing '$requiredWindowGate'."
+}
+$nativeProject = [IO.File]::ReadAllText((Join-Path $repositoryRoot "src\MuteCue.Desktop\MuteCue.Desktop.csproj"))
+Assert-ReleasePipeline ($nativeProject.Contains('mute-cue-tray.png')) "The icon-only Mute Cue logo must be embedded for taskbar and tray use."
 
 $legacyMigration = [IO.File]::ReadAllText((Join-Path $repositoryRoot "src\MuteCue.Desktop\Services\LegacyInstallMigration.cs"))
 foreach ($requiredMigrationGate in @('LocalApplicationData', 'Programs', 'MuteCue', 'unins000.exe', 'DeleteSubKeyTree', 'AppChannel.IsDevelopment', 'attempt < 20', 'Thread.Sleep(250)')) {
