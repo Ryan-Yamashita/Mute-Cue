@@ -13,6 +13,7 @@ public static class AppChannel
     public const string DataDirectoryName = "MuteCue-Dev";
     public const string InstanceName = "Local\\MuteCue.Dev.NativeRuntime.0.6";
     public const string ShutdownEventName = "Local\\MuteCue.Dev.ShutdownForUpdate.0.6";
+    public const string ActivationEventName = "Local\\MuteCue.Dev.ActivateSettings.0.6";
     public static bool SupportsStartupRegistration => false;
 #else
     public static bool IsDevelopment => false;
@@ -21,6 +22,7 @@ public static class AppChannel
     public const string DataDirectoryName = "MuteCue";
     public const string InstanceName = "Local\\MuteCue.NativeRuntime.0.6";
     public const string ShutdownEventName = "Local\\MuteCue.ShutdownForUpdate.0.6";
+    public const string ActivationEventName = "Local\\MuteCue.ActivateSettings.0.6";
     public static bool SupportsStartupRegistration => true;
 #endif
 }

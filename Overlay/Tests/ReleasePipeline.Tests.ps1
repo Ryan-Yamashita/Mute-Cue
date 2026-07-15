@@ -65,7 +65,11 @@ $installerScript = [IO.File]::ReadAllText((Join-Path $repositoryRoot "src\MuteCu
 foreach ($requiredInstallerGate in @(
     'Uninstallable=not IsSmokeTest',
     'CreateUninstallRegKey=not IsSmokeTest',
-    '/MUTECUE-SMOKE-TEST'
+    '/MUTECUE-SMOKE-TEST',
+    '[InstallDelete]',
+    '{app}\versions',
+    '{app}\Mute Cue.vbs',
+    '{app}\MuteCue.Startup.ps1'
 )) {
     Assert-ReleasePipeline ($installerScript.Contains($requiredInstallerGate)) "The native installer is missing '$requiredInstallerGate'."
 }
@@ -74,5 +78,13 @@ $installerTest = [IO.File]::ReadAllText((Join-Path $overlayDirectory "Test-MuteC
 foreach ($requiredInstallerTestGate in @('/NOICONS', '/MUTECUE-SMOKE-TEST')) {
     Assert-ReleasePipeline ($installerTest.Contains($requiredInstallerTestGate)) "The native installer smoke test is missing '$requiredInstallerTestGate'."
 }
+
+$nativeApp = [IO.File]::ReadAllText((Join-Path $repositoryRoot "src\MuteCue.Desktop\App.xaml.cs"))
+foreach ($requiredActivationGate in @('ActivationEventName', 'SignalRunningInstanceToActivate', 'RestoreFromExternalLaunch', 'RepairExistingRegistration')) {
+    Assert-ReleasePipeline ($nativeApp.Contains($requiredActivationGate)) "The native app is missing the existing-instance activation gate '$requiredActivationGate'."
+}
+
+$nativeRuntime = [IO.File]::ReadAllText((Join-Path $repositoryRoot "src\MuteCue.Desktop\NativeRuntime\NativeMuteCueRuntime.cs"))
+Assert-ReleasePipeline (-not $nativeRuntime.Contains('DiscordMuteScanner.ScanAsync')) "The native runtime must not run the leaking Discord UI Automation fallback loop."
 
 "Release pipeline tests: PASS"

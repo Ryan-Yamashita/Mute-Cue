@@ -23,6 +23,16 @@ CreateUninstallRegKey=not IsSmokeTest
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Excludes: "*.pdb"; Flags: ignoreversion recursesubdirs createallsubdirs
 
+[InstallDelete]
+Type: filesandordirs; Name: "{app}\versions"
+Type: files; Name: "{app}\current.txt"
+Type: files; Name: "{app}\current.txt.previous"
+Type: files; Name: "{app}\install.json"
+Type: files; Name: "{app}\Mute Cue.vbs"
+Type: files; Name: "{app}\MuteCue.Startup.ps1"
+Type: files; Name: "{app}\Uninstall Mute Cue.cmd"
+Type: files; Name: "{app}\Uninstall-MuteCue.ps1"
+
 [Icons]
 Name: "{autoprograms}\Mute Cue"; Filename: "{app}\MuteCue.exe"
 Name: "{autodesktop}\Mute Cue"; Filename: "{app}\MuteCue.exe"; Tasks: desktopicon

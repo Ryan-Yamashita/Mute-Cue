@@ -25,16 +25,14 @@ public sealed class NativeMuteCueRuntime : IDisposable
     private readonly Dictionary<string, PredictedBeacnState> _beacnPredictions = new(StringComparer.OrdinalIgnoreCase);
     private Dictionary<int, BeacnHotkeyBinding> _hotkeyBindings = [];
     private Task<BeacnFaderState[]>? _beacnScan;
-    private Task<DiscordLocalState>? _discordScan;
     private Task<MixCreateUsbRoute>? _usbRouteDiscovery;
     private MixCreateUsbMonitor? _usbMonitor;
     private BeacnFaderState[] _beacnStates = [];
-    private DiscordLocalState _discordState = new();
+    private static readonly DiscordLocalState UnknownDiscordState = new();
     private DiscordLocalState _discordRpcState = new();
     private bool _discordRpcStateKnown;
     private DiscordAuthorization _discordAuthorization;
     private DateTime _lastBeacnScanStarted = DateTime.MinValue;
-    private DateTime _lastDiscordScanStarted = DateTime.MinValue;
     private DateTime _lastHotkeyReloadUtc = DateTime.MinValue;
     private DateTime _lastUsbDiscoveryStartedUtc = DateTime.MinValue;
     private DateTime _previewUntilUtc = DateTime.MinValue;
@@ -165,12 +163,6 @@ public sealed class NativeMuteCueRuntime : IDisposable
             catch { /* BEACN can rebuild its accessibility tree during a redraw. */ }
             finally { _beacnScan = null; }
         }
-        if (_discordScan is { IsCompleted: true })
-        {
-            try { _discordState = _discordScan.GetAwaiter().GetResult(); }
-            catch { /* Discord can rebuild its accessibility tree during a call change. */ }
-            finally { _discordScan = null; }
-        }
     }
 
     private void StartDueScans()
@@ -180,11 +172,6 @@ public sealed class NativeMuteCueRuntime : IDisposable
         {
             _lastBeacnScanStarted = now;
             _beacnScan = BeacnAppScanner.ScanAsync();
-        }
-        if (_discordScan is null && (now - _lastDiscordScanStarted).TotalMilliseconds >= 200)
-        {
-            _lastDiscordScanStarted = now;
-            _discordScan = DiscordMuteScanner.ScanAsync(_settings.GetBoolean("DiscordMicDetect", true), _settings.GetBoolean("DiscordDeafenDetect", true));
         }
     }
 
@@ -517,7 +504,7 @@ public sealed class NativeMuteCueRuntime : IDisposable
 
     private void UpdateOverlay()
     {
-        var discordState = _discordRpcStateKnown ? _discordRpcState : _discordState;
+        var discordState = _discordRpcStateKnown ? _discordRpcState : UnknownDiscordState;
         var sources = OverlaySourceComposer.Compose(
             _settings,
             GetDisplayedBeacnStates(),

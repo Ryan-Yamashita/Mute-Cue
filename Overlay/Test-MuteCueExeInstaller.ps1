@@ -26,6 +26,21 @@ function Remove-MuteCueInstallerTestDirectory {
 
 try {
     [void][IO.Directory]::CreateDirectory($temporaryRoot)
+    $legacyPaths = @(
+        "versions\0.5.2\legacy-runtime.ps1",
+        "current.txt",
+        "current.txt.previous",
+        "install.json",
+        "Mute Cue.vbs",
+        "MuteCue.Startup.ps1",
+        "Uninstall Mute Cue.cmd",
+        "Uninstall-MuteCue.ps1"
+    )
+    foreach ($legacyPath in $legacyPaths) {
+        $fullLegacyPath = Join-Path $installDirectory $legacyPath
+        [void][IO.Directory]::CreateDirectory((Split-Path -Parent $fullLegacyPath))
+        [IO.File]::WriteAllText($fullLegacyPath, "obsolete")
+    }
     $installerProcess = Start-Process `
         -FilePath $resolvedInstaller `
         -ArgumentList @(
@@ -51,6 +66,11 @@ try {
     }
     if (@(Get-ChildItem -LiteralPath $installDirectory -Recurse -File -Filter "*.ps1").Count -gt 0) {
         throw "The installed native application contains PowerShell files."
+    }
+    foreach ($legacyPath in $legacyPaths) {
+        if ([IO.File]::Exists((Join-Path $installDirectory $legacyPath))) {
+            throw "The native upgrade retained obsolete file '$legacyPath'."
+        }
     }
 
     $installedExecutable = Join-Path $installDirectory "MuteCue.exe"

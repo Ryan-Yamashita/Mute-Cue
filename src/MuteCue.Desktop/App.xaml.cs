@@ -14,7 +14,10 @@ public partial class App : System.Windows.Application
     private bool _ownsInstance;
     private EventWaitHandle? _shutdownEvent;
     private RegisteredWaitHandle? _shutdownRegistration;
+    private EventWaitHandle? _activationEvent;
+    private RegisteredWaitHandle? _activationRegistration;
     private NativeMuteCueRuntime? _runtime;
+    private bool _activationRequested;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -33,6 +36,7 @@ public partial class App : System.Windows.Application
                 return;
             }
 
+            SignalRunningInstanceToActivate();
             Shutdown();
             return;
         }
@@ -51,9 +55,17 @@ public partial class App : System.Windows.Application
             null,
             Timeout.Infinite,
             executeOnlyOnce: true);
+        _activationEvent = new EventWaitHandle(false, EventResetMode.AutoReset, AppChannel.ActivationEventName);
+        _activationRegistration = ThreadPool.RegisterWaitForSingleObject(
+            _activationEvent,
+            (_, _) => Dispatcher.BeginInvoke(ActivateSettingsWindow),
+            null,
+            Timeout.Infinite,
+            executeOnlyOnce: false);
 
         AppPaths.PrepareDataDirectory();
         var settings = NativeSettingsDocument.Load(AppPaths.SettingsPath);
+        StartupRegistrationService.RepairExistingRegistration();
         _runtime = new NativeMuteCueRuntime(settings);
         _runtime.Start();
 
@@ -61,6 +73,10 @@ public partial class App : System.Windows.Application
         var settingsWindow = new MainWindow(settings, _runtime, startInTray);
         MainWindow = settingsWindow;
         settingsWindow.Show();
+        if (_activationRequested)
+        {
+            ActivateSettingsWindow();
+        }
         if (e.Args.Contains("--preview-overlay", StringComparer.OrdinalIgnoreCase))
         {
             _runtime.PreviewOverlay(centerOnPrimaryScreen: true);
@@ -70,11 +86,20 @@ public partial class App : System.Windows.Application
     protected override void OnExit(ExitEventArgs e)
     {
         _runtime?.Dispose();
+        _activationRegistration?.Unregister(null);
+        _activationEvent?.Dispose();
         _shutdownRegistration?.Unregister(null);
         _shutdownEvent?.Dispose();
         if (_ownsInstance)
         {
-            _instanceMutex?.ReleaseMutex();
+            try
+            {
+                _instanceMutex?.ReleaseMutex();
+            }
+            catch (ApplicationException)
+            {
+                // Shutdown must remain safe even if Windows already abandoned the named mutex.
+            }
         }
 
         _instanceMutex?.Dispose();
@@ -92,6 +117,31 @@ public partial class App : System.Windows.Application
         {
             // The existing instance is still starting or is already closing.
         }
+    }
+
+    private static void SignalRunningInstanceToActivate()
+    {
+        try
+        {
+            using var activationEvent = EventWaitHandle.OpenExisting(AppChannel.ActivationEventName);
+            activationEvent.Set();
+        }
+        catch (WaitHandleCannotBeOpenedException)
+        {
+            // The first instance is still starting or is already closing.
+        }
+    }
+
+    private void ActivateSettingsWindow()
+    {
+        if (MainWindow is MuteCue.Desktop.MainWindow settingsWindow)
+        {
+            _activationRequested = false;
+            settingsWindow.RestoreFromExternalLaunch();
+            return;
+        }
+
+        _activationRequested = true;
     }
 
     private void WaitForRunningInstanceToStop()

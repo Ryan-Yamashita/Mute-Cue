@@ -13,6 +13,23 @@ public static class StartupRegistrationService
 
     public static bool IsRegistered() => IsSupported && File.Exists(ShortcutPath);
 
+    public static void RepairExistingRegistration()
+    {
+        if (!IsRegistered())
+        {
+            return;
+        }
+
+        try
+        {
+            SetRegistered(enabled: true);
+        }
+        catch
+        {
+            // A stale shortcut must never prevent the application from opening.
+        }
+    }
+
     public static void SetRegistered(bool enabled)
     {
         if (!IsSupported)

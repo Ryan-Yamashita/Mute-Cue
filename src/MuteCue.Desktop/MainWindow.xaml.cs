@@ -291,10 +291,15 @@ public partial class MainWindow : Window
 
     private void RestoreFromTray()
     {
-        Show();
+        if (!IsVisible)
+        {
+            Show();
+        }
         WindowState = WindowState.Normal;
         Activate();
     }
+
+    internal void RestoreFromExternalLaunch() => RestoreFromTray();
 
     private void Runtime_OnDiscordStatusChanged(string status)
     {

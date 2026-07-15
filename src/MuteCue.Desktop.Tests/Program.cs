@@ -17,6 +17,7 @@ try
     Assert(AppChannel.ProductName == (expectedDevelopmentChannel ? "Mute Cue Dev" : "Mute Cue"), "The product name must identify the compiled channel.");
     Assert(AppChannel.ExecutableName == (expectedDevelopmentChannel ? "MuteCue-Dev.exe" : "MuteCue.exe"), "The executable name must identify the compiled channel.");
     Assert(AppChannel.DataDirectoryName == (expectedDevelopmentChannel ? "MuteCue-Dev" : "MuteCue"), "The data directory must identify the compiled channel.");
+    Assert(AppChannel.ActivationEventName.Contains(expectedDevelopmentChannel ? "MuteCue.Dev.ActivateSettings" : "MuteCue.ActivateSettings", StringComparison.Ordinal), "Each compiled channel must expose its own settings-activation event.");
     Assert(StartupRegistrationService.IsSupported == !expectedDevelopmentChannel, "Only Stable builds may register themselves to run on startup.");
     Assert(AppPaths.DataDirectory.EndsWith(AppChannel.DataDirectoryName, StringComparison.OrdinalIgnoreCase), "Application paths must use the compiled channel identity.");
     Assert(AppPaths.DiscordAuthorizationPath.StartsWith(AppPaths.DataDirectory, StringComparison.OrdinalIgnoreCase), "Discord authorization must remain inside the current channel's data directory.");
