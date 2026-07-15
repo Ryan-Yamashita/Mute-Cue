@@ -32,6 +32,10 @@ public partial class App : System.Windows.Application
             {
                 SignalRunningInstanceToStop();
                 WaitForRunningInstanceToStop();
+                if (_ownsInstance)
+                {
+                    LegacyInstallMigration.CleanupPerUserInstallation();
+                }
                 Shutdown(_ownsInstance ? 0 : 2);
                 return;
             }
@@ -43,6 +47,7 @@ public partial class App : System.Windows.Application
 
         if (shutdownRequested)
         {
+            LegacyInstallMigration.CleanupPerUserInstallation();
             Shutdown();
             return;
         }
@@ -64,6 +69,7 @@ public partial class App : System.Windows.Application
             executeOnlyOnce: false);
 
         AppPaths.PrepareDataDirectory();
+        LegacyInstallMigration.CleanupPerUserInstallation();
         var settings = NativeSettingsDocument.Load(AppPaths.SettingsPath);
         StartupRegistrationService.RepairExistingRegistration();
         _runtime = new NativeMuteCueRuntime(settings);

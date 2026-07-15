@@ -68,7 +68,9 @@ Dev may seed existing Stable settings and encrypted Discord authorization once, 
 
 ## Installation and releases
 
-The Inno Setup installer writes Stable application files beneath `%LOCALAPPDATA%\Programs\MuteCue`. User data remains separate under `%LOCALAPPDATA%\MuteCue`.
+The Inno Setup installer requests elevation and writes Stable application files beneath `C:\Program Files\Mute Cue`. The installed application runs unelevated, and user data remains separate under `%LOCALAPPDATA%\MuteCue`.
+
+The first machine-wide installation removes the obsolete per-user application directory and its uninstall registration after Windows closes files used by the previous installation. Settings and encrypted authorization are outside that directory and are preserved. Later releases update the same Program Files directory in place.
 
 `Build-MuteCueExeRelease.ps1` publishes the explicit Stable channel, injects the approved public Discord application ID, rejects legacy runtime folders and PowerShell files, creates the installer and SHA-256 checksum, installs the exact generated installer into a temporary location, launches it, and verifies that it does not spawn PowerShell.
 

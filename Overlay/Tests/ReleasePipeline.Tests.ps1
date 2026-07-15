@@ -65,14 +65,23 @@ $installerScript = [IO.File]::ReadAllText((Join-Path $repositoryRoot "src\MuteCu
 foreach ($requiredInstallerGate in @(
     'Uninstallable=not IsSmokeTest',
     'CreateUninstallRegKey=not IsSmokeTest',
+    'DefaultDirName={autopf}\Mute Cue',
+    'PrivilegesRequired=admin',
+    'ArchitecturesAllowed=x64compatible',
+    'ArchitecturesInstallIn64BitMode=x64compatible',
+    'RestartApplications=no',
     '/MUTECUE-SMOKE-TEST',
     '[InstallDelete]',
+    '--shutdown-for-update',
+    'runasoriginaluser',
+    'ShouldRunMigrationHelper',
     '{app}\versions',
     '{app}\Mute Cue.vbs',
     '{app}\MuteCue.Startup.ps1'
 )) {
     Assert-ReleasePipeline ($installerScript.Contains($requiredInstallerGate)) "The native installer is missing '$requiredInstallerGate'."
 }
+Assert-ReleasePipeline (([regex]::Matches($installerScript, 'runasoriginaluser')).Count -ge 2) "Both the migration helper and normal application launch must drop the installer elevation token."
 
 $installerTest = [IO.File]::ReadAllText((Join-Path $overlayDirectory "Test-MuteCueExeInstaller.ps1"))
 foreach ($requiredInstallerTestGate in @('/NOICONS', '/MUTECUE-SMOKE-TEST')) {
@@ -82,6 +91,11 @@ foreach ($requiredInstallerTestGate in @('/NOICONS', '/MUTECUE-SMOKE-TEST')) {
 $nativeApp = [IO.File]::ReadAllText((Join-Path $repositoryRoot "src\MuteCue.Desktop\App.xaml.cs"))
 foreach ($requiredActivationGate in @('ActivationEventName', 'SignalRunningInstanceToActivate', 'RestoreFromExternalLaunch', 'RepairExistingRegistration')) {
     Assert-ReleasePipeline ($nativeApp.Contains($requiredActivationGate)) "The native app is missing the existing-instance activation gate '$requiredActivationGate'."
+}
+
+$legacyMigration = [IO.File]::ReadAllText((Join-Path $repositoryRoot "src\MuteCue.Desktop\Services\LegacyInstallMigration.cs"))
+foreach ($requiredMigrationGate in @('LocalApplicationData', 'Programs', 'MuteCue', 'unins000.exe', 'DeleteSubKeyTree', 'AppChannel.IsDevelopment', 'attempt < 20', 'Thread.Sleep(250)')) {
+    Assert-ReleasePipeline ($legacyMigration.Contains($requiredMigrationGate)) "The native Program Files migration is missing '$requiredMigrationGate'."
 }
 
 $nativeRuntime = [IO.File]::ReadAllText((Join-Path $repositoryRoot "src\MuteCue.Desktop\NativeRuntime\NativeMuteCueRuntime.cs"))

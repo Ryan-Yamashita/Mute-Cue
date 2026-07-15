@@ -6,11 +6,14 @@
 AppId={{5A0EE8CF-044B-4E7C-8E76-EF10C5D0E94B}
 AppName=Mute Cue
 AppVersion={#AppVersion}
-DefaultDirName={localappdata}\Programs\MuteCue
+DefaultDirName={autopf}\Mute Cue
 DefaultGroupName=Mute Cue
 DisableProgramGroupPage=yes
-PrivilegesRequired=lowest
-PrivilegesRequiredOverridesAllowed=dialog
+PrivilegesRequired=admin
+ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
+CloseApplications=yes
+RestartApplications=no
 OutputDir={#OutputDir}
 OutputBaseFilename=MuteCue-Setup
 Compression=lzma2
@@ -41,7 +44,8 @@ Name: "{autodesktop}\Mute Cue"; Filename: "{app}\MuteCue.exe"; Tasks: desktopico
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
 
 [Run]
-Filename: "{app}\MuteCue.exe"; Description: "Launch Mute Cue"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\MuteCue.exe"; Parameters: "--shutdown-for-update"; Flags: runhidden waituntilterminated runasoriginaluser; Check: ShouldRunMigrationHelper
+Filename: "{app}\MuteCue.exe"; Description: "Launch Mute Cue"; Flags: nowait postinstall skipifsilent runasoriginaluser
 
 [Code]
 function IsSmokeTest: Boolean;
@@ -57,4 +61,9 @@ begin
       Exit;
     end;
   end;
+end;
+
+function ShouldRunMigrationHelper: Boolean;
+begin
+  Result := not IsSmokeTest;
 end;

@@ -15,7 +15,7 @@ Use only release assets published by this repository. Each release contains:
 - `MuteCue-<version>-Setup.exe`
 - `MuteCue-<version>-Setup.exe.sha256`
 
-The installer runs for the current Windows user and places the application under `%LOCALAPPDATA%\Programs\MuteCue`. Settings and encrypted Discord authorization remain under `%LOCALAPPDATA%\MuteCue` when the application is updated or uninstalled.
+The installer requests Windows administrator approval and places the Stable application under `C:\Program Files\Mute Cue`. The application itself still runs normally without administrator privileges. Settings and encrypted Discord authorization remain under `%LOCALAPPDATA%\MuteCue` when the application is updated or uninstalled.
 
 ## Requirements
 

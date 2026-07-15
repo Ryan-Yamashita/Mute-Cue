@@ -24,6 +24,14 @@ try
     Assert(NativeMuteCueRuntime.VerifiedAllActionLabels.SequenceEqual(["Knob: Mute to All"]), "The native scanner must use BEACN's verified All action label.");
     Assert(NativeMuteCueRuntime.VerifiedAudienceActionLabels.SequenceEqual(["Mute to Audience"]), "The native scanner must use BEACN's verified Audience action label.");
 
+    var machineInstallRoot = Path.Combine(directory, "machine-install");
+    var legacyInstallRoot = Path.Combine(directory, "legacy-install");
+    Directory.CreateDirectory(machineInstallRoot);
+    await File.WriteAllTextAsync(Path.Combine(machineInstallRoot, "unins000.exe"), "test");
+    await File.WriteAllTextAsync(Path.Combine(machineInstallRoot, "MuteCue.DiscordPublicClient.json"), "{}");
+    Assert(LegacyInstallMigration.IsInstalledStableRoot(machineInstallRoot, legacyInstallRoot) == !expectedDevelopmentChannel, "Only an installed Stable build may remove the obsolete per-user application directory.");
+    Assert(!LegacyInstallMigration.IsInstalledStableRoot(legacyInstallRoot, legacyInstallRoot), "The migration must never delete the directory from which the app is running.");
+
     var stableSeedPath = Path.Combine(directory, "stable", "settings.json");
     var developmentSeedPath = Path.Combine(directory, "development", "settings.json");
     Directory.CreateDirectory(Path.GetDirectoryName(stableSeedPath)!);

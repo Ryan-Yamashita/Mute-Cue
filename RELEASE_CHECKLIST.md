@@ -29,8 +29,10 @@
 
 ## Clean-machine acceptance
 
-- Windows 10 and Windows 11 x64 using a standard user account.
+- Windows 10 and Windows 11 x64 using a standard user account with administrator approval available for install, update, and uninstall.
 - Install, launch, update, and uninstall the exact generated installer.
+- Confirm Stable installs to `C:\Program Files\Mute Cue` and continues to run without elevation.
+- Confirm the first machine-wide update removes the obsolete `%LOCALAPPDATA%\Programs\MuteCue` application directory and per-user uninstall entry.
 - Confirm settings and authorization survive an update and uninstall preserves user data by default.
 - Confirm no .NET or PowerShell installation is required by the application.
 - Confirm startup registration and start-in-tray behavior.
