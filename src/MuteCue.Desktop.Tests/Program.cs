@@ -32,6 +32,12 @@ try
     Assert(written.Contains("must-survive", StringComparison.Ordinal), "Unknown settings must survive native writes.");
     Assert(NativeSettingsDocument.Load(settingsPath).GetBoolean("StartInSystemTray", false), "Saved settings must round-trip.");
     Assert(FaderSourceParser.Merge("Mic,System", "System,Chat").SequenceEqual(["Mic", "System", "Chat"]), "Merged fader sources must preserve display order without duplicates.");
+    Assert(
+        FaderSourceParser.MergeWithDefaults("Mic").SequenceEqual(["Mic", "System", "Link In", "Game", "Link 2 In", "Chat", "Hardware"]),
+        "The BEACN source catalog must remain complete when only Mic is saved.");
+    Assert(
+        FaderSourceParser.MergeWithDefaults("").SequenceEqual(FaderSourceParser.DefaultBeacnSources),
+        "The BEACN source catalog must remain visible when every source is unchecked.");
 
     settings.SetString("BeacnAllFaderKeys", "profile:0,profile:1");
     settings.SetString("BeacnAudienceFaderKeys", "profile:0,profile:1");

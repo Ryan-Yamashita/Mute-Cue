@@ -61,6 +61,28 @@ if ((Invoke-OutputSelector @($false,$true) @($false,$true) 10) -ne -1) {
     throw 'An Audience action must reject a paired Mute All edge.'
 }
 
+$preferredCompletion = [BeacnMuteOverlay.BeacnAppScanner].GetMethod(
+    'ShouldCompletePreferredHardwareRead',
+    [Reflection.BindingFlags]::NonPublic -bor [Reflection.BindingFlags]::Static
+)
+if ($null -eq $preferredCompletion) { throw 'The correlated hardware completion gate is missing.' }
+function Test-PreferredCompletion {
+    param([bool]$Read, [bool]$Changed, [bool]$Confident, [bool]$Correlated)
+    return [bool]$preferredCompletion.Invoke($null, [object[]]@($Read, $Changed, $Confident, $Correlated))
+}
+if (-not (Test-PreferredCompletion $true $true $false $false)) {
+    throw 'A directly observed action-row change must complete hardware calibration.'
+}
+if (-not (Test-PreferredCompletion $true $false $false $true)) {
+    throw 'A uniquely correlated output edge must survive an earlier urgent row reconciliation.'
+}
+if (Test-PreferredCompletion $true $false $true $true) {
+    throw 'A confident mapping must not use the unknown-page correlation exception.'
+}
+if (Test-PreferredCompletion $false $true $false $true) {
+    throw 'A failed exact row read must never calibrate a hardware page.'
+}
+
 $scannerType = [BeacnMuteOverlay.BeacnAppScanner]
 $privateStatic = [Reflection.BindingFlags]::NonPublic -bor [Reflection.BindingFlags]::Static
 $refreshActions = $scannerType.GetMethod('RefreshActionStates', $privateStatic)

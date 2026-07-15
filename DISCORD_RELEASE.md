@@ -14,13 +14,20 @@ Suggested review description: “Mute Cue is a Windows overlay. With explicit us
 
 ## Release build
 
-The public application ID is injected only into the signed release artifact:
+The public application ID is injected only into the release artifact:
 
 ```powershell
-.\Overlay\Build-MuteCueRelease.ps1 -RequireSigning -SigningCertificateThumbprint <thumbprint> -TimestampServer <timestamp-url> -DiscordApplicationId <application-id>
+.\Overlay\Build-MuteCueRelease.ps1 -DiscordApplicationId <application-id> -RequireDiscordPublicClient
 ```
 
 The source-tree JSON intentionally has no application ID. This prevents accidental public builds with a developer-owned or customer-provided Discord application.
+
+For local testing from a Git checkout, copy `Overlay/MuteCue.DiscordPublicClient.local.example.json` to `Overlay/MuteCue.DiscordPublicClient.local.json` and replace the placeholder with a tester-enabled application ID. The local file is ignored by Git, honored only beside the repository’s `.git` directory, and excluded from the release manifest. Do not add a client secret.
+
+Tagged production releases are published by `.github/workflows/publish-release.yml`. Configure a protected GitHub `production` environment with this secret before pushing the matching `v<manifest-version>` tag:
+
+- `MUTE_CUE_DISCORD_APPLICATION_ID`: the approved public-client application ID.
+The workflow rejects a tag/version mismatch, a missing Discord client, and any artifact that fails the exact-archive install and verification gate. It publishes only the verified zip and its SHA-256 file. The release is intentionally unsigned, so Windows may show an unknown-publisher or SmartScreen warning; users should download only from the official GitHub release and verify the published SHA-256 checksum.
 
 ## Privacy copy
 

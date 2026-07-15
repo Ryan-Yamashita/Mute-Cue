@@ -18,6 +18,7 @@ foreach ($relativePathValue in @($manifest.files)) {
 Assert-Packaging (@($manifest.files) -contains "bin\MuteCue.Accessibility.dll") "The release must include the precompiled accessibility component."
 Assert-Packaging (@($manifest.files) -contains "bin\MuteCue.Accessibility.manifest.json") "The release must include the accessibility component manifest."
 Assert-Packaging (@($manifest.files) -contains "MuteCue.DiscordPublicClient.json") "The release must include the built-in Discord public-client configuration."
+Assert-Packaging (-not (@($manifest.files) -contains "MuteCue.DiscordPublicClient.local.json")) "The local Discord development override must never be packaged."
 $unsignedPublicReleaseBlocked = $false
 try {
     & (Join-Path $overlayDirectory "Build-MuteCueRelease.ps1") `

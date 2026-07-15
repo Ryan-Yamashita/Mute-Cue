@@ -23,6 +23,8 @@ $lastConfigurationCheckUtc = [DateTime]::MinValue
 $lastCommandSweepUtc = [DateTime]::MinValue
 $commandSignalPending = $true
 $lastCompletedStates = @()
+$lastCompletedStateRevision = 0L
+$lastCompletedStateCapturedAtUtc = [DateTime]::MinValue
 $maximumScanDurationMilliseconds = 30000
 $skipScannerShutdown = $false
 $fatalErrorPath = Join-Path $RuntimePath "worker-error.log"
@@ -84,16 +86,25 @@ function Invoke-WorkerCommand {
             $target = [BeacnMuteOverlay.BeacnAppScanner]::ResolveCachedActionAtPoint($x, $y)
             if ($null -ne $target) {
                 [BeacnMuteOverlay.BeacnAppScanner]::RequestRenderedFaderRefresh($target.Name, $target.Mode)
+            } elseif ([BeacnMuteOverlay.BeacnAppScanner]::IsTrackedBeacnPoint($x, $y)) {
+                # Cached row geometry can expire during a BEACN redraw or window
+                # move. Reacquire it while the main process performs bounded point
+                # retries; never drop the click silently into the slow safety sweep.
+                [BeacnMuteOverlay.BeacnAppScanner]::RequestGeometryRefresh()
             }
         }
         "HardwareRefresh" {
+            $inputAtUtcTicks = 0L
+            $inputAtProperty = $data.PSObject.Properties['InputAtUtcTicks']
+            if ($null -ne $inputAtProperty) { $inputAtUtcTicks = [long]$inputAtProperty.Value }
             [BeacnMuteOverlay.BeacnAppScanner]::RequestHardwareRefresh(
                 [string]$data.PreferredName,
                 [string]$data.Mode,
                 [int]$data.Position,
                 [long]$data.RequestId,
                 [long]$data.MappingGeneration,
-                [bool]$data.MappingConfident
+                [bool]$data.MappingConfident,
+                $inputAtUtcTicks
             )
         }
         "Shutdown" { $script:stopping = $true }
@@ -169,6 +180,11 @@ try {
             $completedStates = @($scanTask.GetAwaiter().GetResult() | Sort-Object Order)
             if ($completedStates.Count -gt 0 -or $lastCompletedStates.Count -eq 0) {
                 $lastCompletedStates = $completedStates
+                # Latch the revision with the exact state array returned by this
+                # completed scan. Never pair an in-progress revision with the
+                # previous cached array in a heartbeat snapshot.
+                $lastCompletedStateRevision = [long][BeacnMuteOverlay.BeacnAppScanner]::StateRevision
+                $lastCompletedStateCapturedAtUtc = [DateTime][BeacnMuteOverlay.BeacnAppScanner]::StateCapturedAtUtc
             }
             $scanTask = $null
             $scanStartedUtc = [DateTime]::MinValue
@@ -196,8 +212,13 @@ try {
             WorkerInstanceId = $workerInstanceId
             WorkerProcessId = $PID
             Sequence = $sequence
+            StateRevision = [long]$lastCompletedStateRevision
             StartedAtUtc = $startedAt.ToString("o")
             CapturedAtUtc = $now.ToString("o")
+            StateCapturedAtUtc = $(
+                $stateCapturedAt = [DateTime]$lastCompletedStateCapturedAtUtc
+                if ($stateCapturedAt -eq [DateTime]::MinValue) { "" } else { $stateCapturedAt.ToString("o") }
+            )
             ScannerStatus = [string][BeacnMuteOverlay.BeacnAppScanner]::CompatibilityStatus
             ScannerDetail = [string][BeacnMuteOverlay.BeacnAppScanner]::CompatibilityDetail
             AccessibilityRuntimeMode = [string]$accessibilityRuntime.Mode
@@ -234,9 +255,20 @@ try {
                 -replace '"ScanInProgress":(?:true|false),', '' `
                 -replace '"ScanInProgressMilliseconds":[^,]+,', ''
             if ($payloadSignature -ne $lastPayloadSignature -or ($now - $lastWriteUtc).TotalMilliseconds -ge 1000) {
-                Write-AtomicJson -Value $snapshot
-                $lastPayloadSignature = $payloadSignature
-                $lastWriteUtc = $now
+                try {
+                    Write-AtomicJson -Value $snapshot
+                    $lastPayloadSignature = $payloadSignature
+                    $lastWriteUtc = $now
+                } catch {
+                    # Antivirus and indexers can briefly hold the shared snapshot.
+                    # A missed heartbeat is recoverable; killing the state worker is not.
+                    try {
+                        [IO.File]::AppendAllText(
+                            $lifecyclePath,
+                            ("{0:o} snapshot write deferred: {1}{2}" -f [DateTime]::UtcNow, $_.Exception.Message, [Environment]::NewLine)
+                        )
+                    } catch {}
+                }
             }
         }
 
@@ -258,7 +290,15 @@ try {
             # The kernel wakes this immediately for a command; the 60 ms value is
             # only the idle heartbeat, avoiding a busy PowerShell wake loop.
             $change = $commandWatcher.WaitForChanged($watchTypes, 60)
-            if (-not $change.TimedOut) { $commandSignalPending = $true }
+            if (-not $change.TimedOut) {
+                $commandSignalPending = $true
+            } elseif ([IO.Directory]::GetFiles($commandPath, '*.json').Length -gt 0) {
+                # FileSystemWatcher can miss a rename that lands between the prior
+                # level sweep and WaitForChanged registration. The directory is
+                # bounded and normally empty, so this cheap level check removes the
+                # former one-second recovery delay without scanning BEACN itself.
+                $commandSignalPending = $true
+            }
         } catch {
             $commandSignalPending = $true
             Start-Sleep -Milliseconds 60

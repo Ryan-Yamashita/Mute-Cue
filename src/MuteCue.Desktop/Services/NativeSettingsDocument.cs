@@ -120,6 +120,17 @@ public sealed class NativeSettingsDocument
 
 public static class FaderSourceParser
 {
+    public static readonly IReadOnlyList<string> DefaultBeacnSources =
+    [
+        "Mic",
+        "System",
+        "Link In",
+        "Game",
+        "Link 2 In",
+        "Chat",
+        "Hardware",
+    ];
+
     public static IReadOnlyList<string> Parse(string value)
     {
         return value.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
@@ -131,6 +142,15 @@ public static class FaderSourceParser
     public static IReadOnlyList<string> Merge(params string[] values)
     {
         return values.SelectMany(Parse)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(32)
+            .ToArray();
+    }
+
+    public static IReadOnlyList<string> MergeWithDefaults(params string[] values)
+    {
+        return values.SelectMany(Parse)
+            .Concat(DefaultBeacnSources)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .Take(32)
             .ToArray();

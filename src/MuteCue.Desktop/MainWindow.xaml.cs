@@ -161,15 +161,10 @@ public partial class MainWindow : Window
         var staleAllKeys = FaderSourceParser.Parse(_settings.GetString("BeacnAllFaderKeys", ""));
         var staleAudienceKeys = FaderSourceParser.Parse(_settings.GetString("BeacnAudienceFaderKeys", ""));
         var selectionFormat = _settings.GetInteger("BeacnFaderSelectionFormat", 1, 1, 3);
-        var sources = FaderSourceParser.Merge(
+        var sources = FaderSourceParser.MergeWithDefaults(
             _settings.GetString("BeacnFaderNames", ""),
             _settings.GetString("BeacnAllFaderNames", ""),
             _settings.GetString("BeacnAudienceFaderNames", ""));
-
-        if (sources.Count == 0)
-        {
-            sources = new[] { "Mic", "System", "Link In", "Game", "Link 2 In", "Chat", "Hardware" };
-        }
 
         foreach (var source in sources)
         {

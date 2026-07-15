@@ -1,0 +1,80 @@
+name: Publish unsigned release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    environment: production
+    steps:
+      - name: Check out the tagged source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+
+      - name: Set up the native .NET SDK
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Validate release inputs and tag
+        id: release
+        shell: powershell
+        env:
+          DISCORD_APPLICATION_ID: ${{ secrets.MUTE_CUE_DISCORD_APPLICATION_ID }}
+        run: |
+          $manifest = Get-Content .\Overlay\MuteCue.ReleaseManifest.json -Raw | ConvertFrom-Json
+          $expectedTag = "v$($manifest.version)"
+          if ($env:GITHUB_REF_NAME -cne $expectedTag) {
+            throw "Tag '$env:GITHUB_REF_NAME' must exactly match release manifest version '$expectedTag'."
+          }
+          if ($env:DISCORD_APPLICATION_ID -notmatch '^\d{17,22}$') {
+            throw 'The production environment is missing a valid MUTE_CUE_DISCORD_APPLICATION_ID secret.'
+          }
+          "version=$($manifest.version)" >> $env:GITHUB_OUTPUT
+
+      - name: Build and test the native compatibility layer
+        shell: powershell
+        run: |
+          dotnet build .\src\MuteCue.Desktop.Tests\MuteCue.Desktop.Tests.csproj --configuration Release --nologo
+          dotnet run --project .\src\MuteCue.Desktop.Tests\MuteCue.Desktop.Tests.csproj --configuration Release --no-build --nologo
+
+      - name: Build and verify the exact unsigned archive
+        shell: powershell
+        env:
+          DISCORD_APPLICATION_ID: ${{ secrets.MUTE_CUE_DISCORD_APPLICATION_ID }}
+        run: |
+          .\Overlay\Build-MuteCueRelease.ps1 `
+            -OutputDirectory .\artifacts\release `
+            -DiscordApplicationId $env:DISCORD_APPLICATION_ID `
+            -RequireDiscordPublicClient
+
+      - name: Publish immutable GitHub release assets
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          $archive = ".\artifacts\release\MuteCue-$env:RELEASE_VERSION.zip"
+          $checksum = "$archive.sha256"
+          $notes = @'
+          ## Important: unsigned Windows download
+
+          This community release is intentionally not Authenticode-signed. Windows may show an "unknown publisher" or SmartScreen warning. Download only from this official Mute Cue GitHub release, verify the included SHA-256 checksum, and inspect the source before running it if you are not comfortable accepting that risk.
+          '@
+          gh release create $env:GITHUB_REF_NAME $archive $checksum `
+            --verify-tag `
+            --title "Mute Cue $env:RELEASE_VERSION (Unsigned)" `
+            --notes $notes `
+            --generate-notes

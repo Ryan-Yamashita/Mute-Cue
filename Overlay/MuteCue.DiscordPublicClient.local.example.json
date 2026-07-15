@@ -1,0 +1,5 @@
+{
+  "schemaVersion": 1,
+  "applicationId": "YOUR_APPLICATION_ID",
+  "redirectUri": "http://127.0.0.1:47891/mute-cue/"
+}

@@ -64,7 +64,16 @@ if ([string]::IsNullOrWhiteSpace($script:startupLauncherPath)) {
 $settingsPath = [string]$script:muteCuePaths.SettingsPath
 $discordAuthorizationPath = [string]$script:muteCuePaths.DiscordAuthorizationPath
 Initialize-MuteCueDiagnostics -Path ([string]$script:muteCuePaths.DiagnosticPath)
-$script:discordPublicClient = Get-MuteCueDiscordPublicClient -Path (Join-Path $scriptDir "MuteCue.DiscordPublicClient.json")
+$discordPublicClientPath = Join-Path $scriptDir "MuteCue.DiscordPublicClient.json"
+$developmentDiscordPublicClientPath = Join-Path $scriptDir "MuteCue.DiscordPublicClient.local.json"
+$repositoryRoot = Split-Path -Parent $scriptDir
+if (
+    (Test-Path -LiteralPath (Join-Path $repositoryRoot ".git")) -and
+    (Test-Path -LiteralPath $developmentDiscordPublicClientPath)
+) {
+    $discordPublicClientPath = $developmentDiscordPublicClientPath
+}
+$script:discordPublicClient = Get-MuteCueDiscordPublicClient -Path $discordPublicClientPath
 if (Test-Path -LiteralPath ([string]$script:muteCuePaths.DiscordSecretPath)) {
     try {
         Remove-Item -LiteralPath ([string]$script:muteCuePaths.DiscordSecretPath) -Force
@@ -618,11 +627,22 @@ namespace BeacnMuteOverlay {
         public ushort DeviceAddress { get; private set; }
         public byte Endpoint { get; private set; }
         public byte[] Data { get; private set; }
+        public DateTime CapturedAtUtc { get; private set; }
 
         public UsbPacket(ushort deviceAddress, byte endpoint, byte[] data) {
             DeviceAddress = deviceAddress;
             Endpoint = endpoint;
             Data = data;
+            CapturedAtUtc = DateTime.UtcNow;
+        }
+
+        public UsbPacket(ushort deviceAddress, byte endpoint, byte[] data, DateTime capturedAtUtc) {
+            DeviceAddress = deviceAddress;
+            Endpoint = endpoint;
+            Data = data;
+            CapturedAtUtc = capturedAtUtc.Kind == DateTimeKind.Utc
+                ? capturedAtUtc
+                : capturedAtUtc.ToUniversalTime();
         }
     }
 
@@ -888,7 +908,7 @@ namespace BeacnMuteOverlay {
 
                     byte[] payload = new byte[payloadLength];
                     Buffer.BlockCopy(record, usbHeaderLength, payload, 0, payloadLength);
-                    EnqueuePacket(new UsbPacket(deviceAddress, endpoint, payload));
+                    EnqueuePacket(new UsbPacket(deviceAddress, endpoint, payload, DateTime.UtcNow));
                 }
             } catch (Exception error) {
                 // The overlay treats a stopped capture as unavailable and may retry it.
@@ -979,6 +999,7 @@ namespace BeacnMuteOverlay {
         public bool AllActionActive { get; set; }
         public bool AudienceActionStateKnown { get; set; }
         public bool AudienceActionActive { get; set; }
+        public long ActionRevision { get; set; }
         public bool HasAllActionBounds { get; set; }
         public double AllActionLeft { get; set; }
         public double AllActionTop { get; set; }
@@ -1056,6 +1077,7 @@ namespace BeacnMuteOverlay {
             public bool AudienceActionMenuButtonSeen;
             public DateTime AllVerifiedUtc = DateTime.MinValue;
             public DateTime AudienceVerifiedUtc = DateTime.MinValue;
+            public long ActionRevision;
             public bool PersonalMuted;
             public bool AudienceMuted;
             public bool IsLocked;
@@ -1078,6 +1100,7 @@ namespace BeacnMuteOverlay {
             public bool AudienceActionMenuButtonSeen;
             public DateTime AllVerifiedUtc;
             public DateTime AudienceVerifiedUtc;
+            public long ActionRevision;
             public bool PersonalMuted;
             public bool AudienceMuted;
             public bool IsLocked;
@@ -1092,6 +1115,7 @@ namespace BeacnMuteOverlay {
         private sealed class HardwareRefreshRequest {
             public string PreferredName;
             public string OutputCandidateName;
+            public bool OutputCandidateCorrelated;
             public int Mask;
             public int Position;
             public long RequestId;
@@ -1099,6 +1123,8 @@ namespace BeacnMuteOverlay {
             public bool MappingConfident;
             public int Attempt;
             public int FallbackIndex;
+            public bool FinalVerification;
+            public DateTime RequestedAtUtc;
             public DateTime NotBeforeUtc;
         }
 
@@ -1141,6 +1167,13 @@ namespace BeacnMuteOverlay {
             new ConcurrentQueue<HardwareRefreshRequest>();
         private const int MaximumPendingHardwareRefreshes = 128;
         private static int pendingHardwareRefreshCount;
+        private static readonly ConcurrentDictionary<string, long> recentPersonalOutputEdges =
+            new ConcurrentDictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+        private static readonly ConcurrentDictionary<string, long> recentAudienceOutputEdges =
+            new ConcurrentDictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+        private const int MaximumRecordedOutputEdgeNames = 128;
+        private const int OutputEdgePreRequestToleranceMilliseconds = 250;
+        private const int OutputEdgeCorrelationMilliseconds = 2500;
         private static readonly ConcurrentDictionary<string, int> postDiscoveryRefreshes =
             new ConcurrentDictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private static readonly ConcurrentDictionary<string, int> postDiscoveryUrgentRefreshes =
@@ -1175,6 +1208,8 @@ namespace BeacnMuteOverlay {
         private static long lastHardwareRequestId;
         private static long lastHardwareMappingGeneration;
         private static long hardwareResultSequence;
+        private static long stateRevision;
+        private static long lastStateObservationUtcTicks;
         private static AutomationElement subscribedWindow;
         private static IntPtr subscribedWindowHandle = IntPtr.Zero;
         private static readonly object geometryGate = new object();
@@ -1202,6 +1237,13 @@ namespace BeacnMuteOverlay {
         public static long LastHardwareRequestId { get { return Interlocked.Read(ref lastHardwareRequestId); } }
         public static long LastHardwareMappingGeneration { get { return Interlocked.Read(ref lastHardwareMappingGeneration); } }
         public static long HardwareResultSequence { get { return Interlocked.Read(ref hardwareResultSequence); } }
+        public static long StateRevision { get { return Interlocked.Read(ref stateRevision); } }
+        public static DateTime StateCapturedAtUtc {
+            get {
+                long ticks = Interlocked.Read(ref lastStateObservationUtcTicks);
+                return ticks <= 0 ? DateTime.MinValue : new DateTime(ticks, DateTimeKind.Utc);
+            }
+        }
         public static double LastScanMilliseconds { get { return lastScanMilliseconds; } }
         public static long NativeGeometryGeneration { get { return Interlocked.Read(ref nativeGeometryGeneration); } }
         public static bool GeometryRefreshInProgress {
@@ -1228,6 +1270,7 @@ namespace BeacnMuteOverlay {
                     !pendingActionRefreshes.IsEmpty ||
                     !postDiscoveryUrgentRefreshes.IsEmpty ||
                     !postDiscoveryRefreshes.IsEmpty ||
+                    (discoveryTask != null && !discoveryTask.IsCompleted) ||
                     !pendingHardwareRefreshes.IsEmpty;
             }
         }
@@ -1265,6 +1308,8 @@ namespace BeacnMuteOverlay {
             HardwareRefreshRequest discarded;
             while (pendingHardwareRefreshes.TryDequeue(out discarded)) { }
             Interlocked.Exchange(ref pendingHardwareRefreshCount, 0);
+            recentPersonalOutputEdges.Clear();
+            recentAudienceOutputEdges.Clear();
             Interlocked.Exchange(ref actionRefreshRequested, 0);
             Interlocked.Exchange(ref discoveryRequested, 0);
             Interlocked.Exchange(ref geometryRefreshRequested, 0);
@@ -1288,9 +1333,13 @@ namespace BeacnMuteOverlay {
         public static void RequestFaderRefresh(string name, string mode) {
             if (String.IsNullOrWhiteSpace(name)) return;
             int mask = String.Equals(mode, "All", StringComparison.OrdinalIgnoreCase)
-                ? 1
-                : String.Equals(mode, "Audience", StringComparison.OrdinalIgnoreCase) ? 2 : 3;
-            QueueFaderRefresh(name, mask);
+                ? 21
+                : String.Equals(mode, "Audience", StringComparison.OrdinalIgnoreCase) ? 26 : 31;
+            // A row/output event is BEACN's exact source identity. Always let it
+            // interrupt positional page recovery and force an independent follow-up
+            // read. The coalescing urgent dictionary keeps redraw bursts bounded,
+            // and no physical-position guess is ever shown.
+            QueueUrgentFaderRefresh(name, mask);
         }
 
         public static void RequestUrgentFaderRefresh(string name, string mode) {
@@ -1302,13 +1351,34 @@ namespace BeacnMuteOverlay {
         }
 
         public static void RequestHardwareRefresh(string preferredName, string mode, int position, long requestId, long mappingGeneration, bool mappingConfident) {
+            RequestHardwareRefresh(
+                preferredName,
+                mode,
+                position,
+                requestId,
+                mappingGeneration,
+                mappingConfident,
+                DateTime.UtcNow.Ticks
+            );
+        }
+
+        public static void RequestHardwareRefresh(string preferredName, string mode, int position, long requestId, long mappingGeneration, bool mappingConfident, long inputAtUtcTicks) {
             int mask = String.Equals(mode, "All", StringComparison.OrdinalIgnoreCase)
                 ? 5
                 : String.Equals(mode, "Audience", StringComparison.OrdinalIgnoreCase) ? 10 : 0;
             if (mask == 0) return;
+            DateTime now = DateTime.UtcNow;
+            DateTime inputAtUtc = now;
+            try {
+                if (inputAtUtcTicks > DateTime.MinValue.Ticks && inputAtUtcTicks < DateTime.MaxValue.Ticks) {
+                    DateTime candidate = new DateTime(inputAtUtcTicks, DateTimeKind.Utc);
+                    if (Math.Abs((now - candidate).TotalSeconds) <= 5) inputAtUtc = candidate;
+                }
+            } catch { }
             EnqueueHardwareRefresh(new HardwareRefreshRequest {
                 PreferredName = preferredName ?? String.Empty,
                 OutputCandidateName = String.Empty,
+                OutputCandidateCorrelated = false,
                 Mask = mask,
                 Position = position,
                 RequestId = requestId,
@@ -1316,8 +1386,10 @@ namespace BeacnMuteOverlay {
                 MappingConfident = mappingConfident,
                 Attempt = 0,
                 FallbackIndex = -1,
+                FinalVerification = false,
+                RequestedAtUtc = inputAtUtc,
                 // Let BEACN finish applying the USB action before reading its row.
-                NotBeforeUtc = DateTime.UtcNow.AddMilliseconds(30)
+                NotBeforeUtc = now.AddMilliseconds(30)
             });
             Interlocked.Exchange(ref actionRefreshRequested, 1);
         }
@@ -1367,8 +1439,8 @@ namespace BeacnMuteOverlay {
         public static void RequestRenderedFaderRefresh(string name, string mode) {
             if (String.IsNullOrWhiteSpace(name)) return;
             int mask = String.Equals(mode, "All", StringComparison.OrdinalIgnoreCase)
-                ? 5
-                : String.Equals(mode, "Audience", StringComparison.OrdinalIgnoreCase) ? 10 : 15;
+                ? 21
+                : String.Equals(mode, "Audience", StringComparison.OrdinalIgnoreCase) ? 26 : 31;
             QueueFaderRefresh(name, mask);
         }
 
@@ -1684,6 +1756,7 @@ namespace BeacnMuteOverlay {
                     AudienceActionMenuButtonSeen = fader.AudienceActionMenuButtonSeen,
                     AllVerifiedUtc = fader.AllVerifiedUtc,
                     AudienceVerifiedUtc = fader.AudienceVerifiedUtc,
+                    ActionRevision = fader.ActionRevision,
                     PersonalMuted = fader.PersonalMuted,
                     AudienceMuted = fader.AudienceMuted,
                     IsLocked = fader.IsLocked
@@ -1707,12 +1780,14 @@ namespace BeacnMuteOverlay {
                 fader.AudienceActionMenuButtonSeen = checkpoint.AudienceActionMenuButtonSeen;
                 fader.AllVerifiedUtc = checkpoint.AllVerifiedUtc;
                 fader.AudienceVerifiedUtc = checkpoint.AudienceVerifiedUtc;
+                fader.ActionRevision = checkpoint.ActionRevision;
                 fader.PersonalMuted = checkpoint.PersonalMuted;
                 fader.AudienceMuted = checkpoint.AudienceMuted;
                 fader.IsLocked = checkpoint.IsLocked;
             }
-            pendingActionRefreshes.Clear();
-            Interlocked.Exchange(ref actionRefreshRequested, 0);
+            // Do not clear refreshes queued concurrently while geometry was moving.
+            // The caller restores this checkpoint, then the named request retries
+            // against the new screen coordinates on the next scan.
         }
 
         private static BeacnFaderState[] Scan() {
@@ -1751,9 +1826,20 @@ namespace BeacnMuteOverlay {
                 // stable fader layout. Refresh only their small accessibility subset
                 // on every monitor cycle instead of waiting for full rediscovery.
                 if (!geometrySettling && trackedFaders.Count > 0) {
-                    HardwareRefreshRequest hardwareRequest;
-                    bool hardwareRefreshDequeued = TryDequeueHardwareRefresh(out hardwareRequest);
-                    if (hardwareRefreshDequeued) {
+                    // Exact-name work (hotkeys and resolved desktop clicks) must be
+                    // able to interrupt a page-recovery walk. This keeps one stale
+                    // hardware mapping from monopolizing several expensive scans.
+                    bool urgentRefresh = false;
+                    Dictionary<string, int> requested =
+                        DrainActionRefreshes(pendingUrgentActionRefreshes, MaximumFaderRefreshesPerScan);
+                    urgentRefresh = requested.Count > 0;
+
+                    HardwareRefreshRequest hardwareRequest = null;
+                    bool hardwareRefreshDequeued = false;
+                    if (!urgentRefresh) {
+                        hardwareRefreshDequeued = TryDequeueHardwareRefresh(out hardwareRequest);
+                    }
+                    if (!urgentRefresh && hardwareRefreshDequeued) {
                         if (hardwareRequest.NotBeforeUtc > now) {
                             EnqueueHardwareRefresh(hardwareRequest);
                             Interlocked.Exchange(ref actionRefreshRequested, 1);
@@ -1765,14 +1851,8 @@ namespace BeacnMuteOverlay {
                         }
                     }
 
-                    bool urgentRefresh = false;
-                    Dictionary<string, int> requested = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-                    if (!hardwareRefreshDequeued) {
-                        requested = DrainActionRefreshes(pendingUrgentActionRefreshes, MaximumFaderRefreshesPerScan);
-                        urgentRefresh = requested.Count > 0;
-                        if (!urgentRefresh) {
-                            requested = DrainActionRefreshes(pendingActionRefreshes, MaximumFaderRefreshesPerScan);
-                        }
+                    if (!urgentRefresh && !hardwareRefreshDequeued) {
+                        requested = DrainActionRefreshes(pendingActionRefreshes, MaximumFaderRefreshesPerScan);
                     }
                     if (requested.Count > 0) {
                         if (!RefreshActionStates(requested, urgentRefresh)) RequestDiscovery();
@@ -2170,6 +2250,13 @@ namespace BeacnMuteOverlay {
             UnsubscribeFaderHandlers(trackedFaders);
             foreach (TrackedFader fader in complete) SubscribeFaderHandlers(fader);
             trackedFaders = complete;
+            foreach (TrackedFader fader in complete) {
+                fader.ActionRevision = MarkStateObservation();
+                // Discovery is the first real observation. Queue one independent
+                // named verification per fader so startup authority never depends
+                // on a cache-only idle scan.
+                QueueFaderRefresh(fader.Name, 15);
+            }
             Interlocked.Exchange(ref geometryRefreshIndex, -1);
             SetSubscribedWindow(windows.Count > 0 ? windows[0] : null);
             lastDiscovery = DateTime.UtcNow;
@@ -2312,6 +2399,7 @@ namespace BeacnMuteOverlay {
             try {
                 if (fader.PersonalButton != null) {
                     fader.PersonalChangedHandler = delegate(object sender, AutomationPropertyChangedEventArgs args) {
+                        RecordOutputEdge(fader.Name, true);
                         MarkActionEvent("output " + fader.Name + "/All");
                         RequestFaderRefresh(fader.Name, "All");
                     };
@@ -2326,6 +2414,7 @@ namespace BeacnMuteOverlay {
             try {
                 if (fader.AudienceButton != null) {
                     fader.AudienceChangedHandler = delegate(object sender, AutomationPropertyChangedEventArgs args) {
+                        RecordOutputEdge(fader.Name, false);
                         MarkActionEvent("output " + fader.Name + "/Audience");
                         RequestFaderRefresh(fader.Name, "Audience");
                     };
@@ -2473,6 +2562,19 @@ namespace BeacnMuteOverlay {
             lastActionEventSummary = DateTime.Now.ToString("HH:mm:ss.fff") + " " + summary;
         }
 
+        private static void RecordOutputEdge(string name, bool personal) {
+            if (String.IsNullOrWhiteSpace(name)) return;
+            ConcurrentDictionary<string, long> target = personal
+                ? recentPersonalOutputEdges
+                : recentAudienceOutputEdges;
+            if (target.Count >= MaximumRecordedOutputEdgeNames && !target.ContainsKey(name)) {
+                // The live mixer has far fewer rows. Clearing an impossible identity
+                // burst fails correlation closed and keeps this callback bounded.
+                target.Clear();
+            }
+            target[name] = DateTime.UtcNow.Ticks;
+        }
+
         private static void SetSubscribedWindow(AutomationElement window) {
             if (subscribedWindow != null) {
                 try {
@@ -2553,6 +2655,9 @@ namespace BeacnMuteOverlay {
             }
             Interlocked.Exchange(ref possibleLayoutChangeUtcTicks, 0);
             Interlocked.Increment(ref nativeGeometryGeneration);
+            // Geometry is part of the published envelope, but it must not advance
+            // any fader's action-confirmation revision.
+            MarkStateObservation();
             lastActionEventSummary = DateTime.Now.ToString("HH:mm:ss.fff") + " window geometry changed";
             return true;
         }
@@ -2769,11 +2874,13 @@ namespace BeacnMuteOverlay {
                         }
                     } else {
                         ClearDeferredActionRefresh(fader.Name);
-                        if (changed) {
+                        bool requiresFollowup = (mask & 16) != 0;
+                        int followupMask = mask & ~16;
+                        if (changed || requiresFollowup) {
                             // Require a second real UIA read, not merely a repeated cached snapshot.
                             // HasPendingChanges keeps the worker on its 15 ms confirmation cadence.
-                            if (urgent) QueueUrgentFaderRefresh(fader.Name, mask);
-                            else QueueFaderRefresh(fader.Name, mask);
+                            if (urgent) QueueUrgentFaderRefresh(fader.Name, followupMask);
+                            else QueueFaderRefresh(fader.Name, followupMask);
                         }
                     }
                 }
@@ -2823,6 +2930,8 @@ namespace BeacnMuteOverlay {
                     fader.AllVerifiedUtc = DateTime.UtcNow;
                     if (wasKnown && wasActive != isActive) changed = true;
                 } else {
+                    fader.AllActionSeen = false;
+                    fader.AllVerifiedUtc = DateTime.UtcNow;
                     succeeded = false;
                 }
             }
@@ -2856,11 +2965,22 @@ namespace BeacnMuteOverlay {
                     fader.AudienceVerifiedUtc = DateTime.UtcNow;
                     if (wasKnown && wasActive != isActive) changed = true;
                 } else {
+                    fader.AudienceActionSeen = false;
+                    fader.AudienceVerifiedUtc = DateTime.UtcNow;
                     succeeded = false;
                 }
             }
 
+            // A failed targeted read is also a real observation: it makes the row
+            // explicitly unknown and must be published. The per-fader revision
+            // prevents cache-only or unrelated reads from confirming this row.
+            if ((mask & 3) != 0) fader.ActionRevision = MarkStateObservation();
             return succeeded;
+        }
+
+        private static long MarkStateObservation() {
+            Interlocked.Exchange(ref lastStateObservationUtcTicks, DateTime.UtcNow.Ticks);
+            return Interlocked.Increment(ref stateRevision);
         }
 
         private static int SelectUniqueOutputChange(bool[] personalChanged, bool[] audienceChanged, int mask) {
@@ -2899,6 +3019,43 @@ namespace BeacnMuteOverlay {
             return selected >= 0 && selected < snapshot.Count ? snapshot[selected] : null;
         }
 
+        private static bool IsCorrelatedUniqueOutputEdge(string name, int mask, DateTime requestedAtUtc) {
+            if (String.IsNullOrWhiteSpace(name) || requestedAtUtc == DateTime.MinValue) return false;
+            List<TrackedFader> snapshot = trackedFaders;
+            bool[] personalRecent = new bool[snapshot.Count];
+            bool[] audienceRecent = new bool[snapshot.Count];
+            DateTime now = DateTime.UtcNow;
+            long earliestTicks = requestedAtUtc.AddMilliseconds(-OutputEdgePreRequestToleranceMilliseconds).Ticks;
+            long latestTicks = requestedAtUtc.AddMilliseconds(OutputEdgeCorrelationMilliseconds).Ticks;
+            for (int index = 0; index < snapshot.Count; index++) {
+                string faderName = snapshot[index].Name;
+                long ticks;
+                if (recentPersonalOutputEdges.TryGetValue(faderName, out ticks)) {
+                    personalRecent[index] = ticks >= earliestTicks && ticks <= latestTicks && ticks <= now.Ticks;
+                }
+                if (recentAudienceOutputEdges.TryGetValue(faderName, out ticks)) {
+                    audienceRecent[index] = ticks >= earliestTicks && ticks <= latestTicks && ticks <= now.Ticks;
+                }
+            }
+            int selected = SelectUniqueOutputChange(personalRecent, audienceRecent, mask);
+            return selected >= 0 && selected < snapshot.Count && String.Equals(
+                snapshot[selected].Name,
+                name,
+                StringComparison.OrdinalIgnoreCase
+            );
+        }
+
+        private static bool ShouldCompletePreferredHardwareRead(
+            bool preferredRead,
+            bool preferredChanged,
+            bool mappingConfident,
+            bool outputCandidateCorrelated
+        ) {
+            return preferredRead && (
+                preferredChanged || (!mappingConfident && outputCandidateCorrelated)
+            );
+        }
+
         private static TrackedFader FindTrackedFader(string name) {
             if (String.IsNullOrWhiteSpace(name)) return null;
             foreach (TrackedFader fader in trackedFaders) {
@@ -2910,50 +3067,122 @@ namespace BeacnMuteOverlay {
         private static HardwareRefreshCompletion RefreshHardwareActionState(HardwareRefreshRequest request) {
             Stopwatch timer = Stopwatch.StartNew();
             // A page hint can become stale without a page-button packet reaching us.
-            // The top output toggles provide a cheap, source-specific edge, so consult
-            // them even for a previously confident mapping before reading lower rows.
-            if (request.FallbackIndex < 0 && String.IsNullOrWhiteSpace(request.OutputCandidateName)) {
+            // Only use output-toggle edge inference when the page mapping is already
+            // uncertain; an unrelated earlier client edge must not override a known row.
+            if (
+                !request.MappingConfident &&
+                request.FallbackIndex < 0 &&
+                String.IsNullOrWhiteSpace(request.OutputCandidateName)
+            ) {
                 TrackedFader outputCandidate = FindUniqueOutputChange(request.Mask);
-                if (outputCandidate != null) request.OutputCandidateName = outputCandidate.Name;
+                if (outputCandidate != null) {
+                    request.OutputCandidateName = outputCandidate.Name;
+                    request.OutputCandidateCorrelated = IsCorrelatedUniqueOutputEdge(
+                        outputCandidate.Name,
+                        request.Mask,
+                        request.RequestedAtUtc
+                    );
+                }
             }
-            TrackedFader preferred = FindTrackedFader(request.OutputCandidateName);
-            if (preferred == null) {
-                preferred = FindTrackedFader(request.PreferredName);
+            if (
+                !request.MappingConfident &&
+                request.FallbackIndex < 0 &&
+                !request.OutputCandidateCorrelated &&
+                !String.IsNullOrWhiteSpace(request.OutputCandidateName)
+            ) {
+                // The toggle value can become visible just before its property event
+                // callback. Retain the provisional exact candidate and correlate it
+                // on a later staged retry instead of losing the edge to that race.
+                request.OutputCandidateCorrelated = IsCorrelatedUniqueOutputEdge(
+                    request.OutputCandidateName,
+                    request.Mask,
+                    request.RequestedAtUtc
+                );
             }
+            TrackedFader preferred = request.MappingConfident
+                ? FindTrackedFader(request.PreferredName)
+                : FindTrackedFader(request.OutputCandidateName);
+            if (preferred == null) preferred = FindTrackedFader(request.PreferredName);
 
             if (preferred != null) {
                 bool preferredChanged;
                 bool preferredRead = TryRefreshFaderAction(preferred, request.Mask, out preferredChanged);
-                bool outputLocated = !String.IsNullOrWhiteSpace(request.OutputCandidateName) &&
-                    String.Equals(preferred.Name, request.OutputCandidateName, StringComparison.OrdinalIgnoreCase);
-                if (preferredRead && preferredChanged) {
+                bool correlatedCandidate = request.OutputCandidateCorrelated && String.Equals(
+                    preferred.Name,
+                    request.OutputCandidateName,
+                    StringComparison.OrdinalIgnoreCase
+                );
+                if (ShouldCompletePreferredHardwareRead(
+                    preferredRead,
+                    preferredChanged,
+                    request.MappingConfident,
+                    correlatedCandidate
+                )) {
                     timer.Stop();
                     lastActionRefresh = DateTime.UtcNow;
                     lastHardwareRefreshSummary = String.Format(
-                        "preferred {0} attempt={1} elapsed={2:0}ms",
+                        "preferred {0} attempt={1} correlated={2} elapsed={3:0}ms",
                         preferred.Name,
                         request.Attempt + 1,
+                        correlatedCandidate ? 1 : 0,
                         timer.Elapsed.TotalMilliseconds
                     );
                     return new HardwareRefreshCompletion { Request = request, ChangedName = preferred.Name };
                 }
 
-                // A first read can race BEACN's JUCE redraw. Retry the same named
-                // software row once before treating the page/position hint as stale.
-                if (request.FallbackIndex < 0 && (request.Attempt == 0 || (outputLocated && request.Attempt < 2))) {
+                // JUCE can redraw after several early reads. A known hardware page
+                // must stay on its exact mapped row instead of walking every other
+                // fader. Unknown pages use the same staged reads first, allowing a
+                // late output edge to identify the page before broad recovery.
+                int[] preferredRetryDelays = new int[] { 45, 80, 140, 240 };
+                if (request.FallbackIndex < 0 && request.Attempt < preferredRetryDelays.Length) {
+                    int retryDelay = preferredRetryDelays[request.Attempt];
                     request.Attempt++;
-                    request.NotBeforeUtc = DateTime.UtcNow.AddMilliseconds(40);
+                    request.NotBeforeUtc = DateTime.UtcNow.AddMilliseconds(retryDelay);
                     EnqueueHardwareRefresh(request);
                     Interlocked.Exchange(ref actionRefreshRequested, 1);
                     timer.Stop();
                     lastActionRefresh = DateTime.UtcNow;
                     lastHardwareRefreshSummary = String.Format(
-                        "waiting {0} elapsed={1:0}ms",
+                        "preferred waiting {0} attempt={1} delay={2}ms elapsed={3:0}ms",
                         preferred.Name,
+                        request.Attempt + 1,
+                        retryDelay,
                         timer.Elapsed.TotalMilliseconds
                     );
                     return null;
                 }
+            }
+
+            if (request.MappingConfident) {
+                timer.Stop();
+                lastActionRefresh = DateTime.UtcNow;
+                lastHardwareRefreshSummary = String.Format(
+                    "confident no change preferred={0} attempts={1} elapsed={2:0}ms",
+                    request.PreferredName,
+                    request.Attempt + 1,
+                    timer.Elapsed.TotalMilliseconds
+                );
+                return new HardwareRefreshCompletion {
+                    Request = request,
+                    ChangedName = String.Empty
+                };
+            }
+
+            if (request.FinalVerification) {
+                HardwareRefreshCompletion finalCompletion = new HardwareRefreshCompletion {
+                    Request = request,
+                    ChangedName = String.Empty
+                };
+                timer.Stop();
+                lastActionRefresh = DateTime.UtcNow;
+                lastHardwareRefreshSummary = String.Format(
+                    "final no change preferred={0} attempt={1} elapsed={2:0}ms",
+                    request.PreferredName,
+                    request.Attempt + 1,
+                    timer.Elapsed.TotalMilliseconds
+                );
+                return finalCompletion;
             }
 
             // A stale page hint used to make one scan synchronously inspect every
@@ -3006,22 +3235,23 @@ namespace BeacnMuteOverlay {
                 return null;
             }
 
-            // Complete even when no row changed so PowerShell can immediately retract
-            // this request's incorrect prediction instead of waiting on its lease.
-            HardwareRefreshCompletion completion = new HardwareRefreshCompletion {
-                Request = request,
-                ChangedName = String.Empty
-            };
+            // JUCE can apply the hardware action after the fallback walk has already
+            // passed the intended row. Give the preferred row one bounded final read
+            // before retracting the request as a no-change result.
+            request.FinalVerification = true;
+            request.FallbackIndex = -1;
+            request.NotBeforeUtc = DateTime.UtcNow.AddMilliseconds(60);
+            EnqueueHardwareRefresh(request);
+            Interlocked.Exchange(ref actionRefreshRequested, 1);
             timer.Stop();
             lastActionRefresh = DateTime.UtcNow;
             lastHardwareRefreshSummary = String.Format(
-                "no change preferred={0} attempt={1} fallbackSteps={2} elapsed={3:0}ms",
+                "final verification waiting preferred={0} elapsed={1:0}ms",
                 request.PreferredName,
-                request.Attempt + 1,
-                request.FallbackIndex,
                 timer.Elapsed.TotalMilliseconds
             );
-            return completion;
+            return null;
+
         }
 
         private static bool TryReadActionRow(
@@ -3304,6 +3534,7 @@ namespace BeacnMuteOverlay {
                             AllActionActive = fader.AllActionSeen && !fader.AllActionMenuButtonSeen,
                             AudienceActionStateKnown = fader.AudienceActionSeen,
                             AudienceActionActive = fader.AudienceActionSeen && !fader.AudienceActionMenuButtonSeen,
+                            ActionRevision = fader.ActionRevision,
                             HasAllActionBounds = !fader.AllActionBounds.IsEmpty,
                             AllActionLeft = fader.AllActionBounds.IsEmpty ? 0 : fader.AllActionBounds.Left,
                             AllActionTop = fader.AllActionBounds.IsEmpty ? 0 : fader.AllActionBounds.Top,
@@ -3689,6 +3920,10 @@ namespace BeacnMuteOverlay {
         public long ExpiresAtUnixSeconds { get; set; }
     }
 
+    internal sealed class TerminalDiscordException : Exception {
+        public TerminalDiscordException(string message) : base(message) { }
+    }
+
     public static class DiscordRpcMonitor {
         private const int MaximumQueuedEvents = 256;
         private static readonly ConcurrentQueue<DiscordRpcMonitorEvent> events = new ConcurrentQueue<DiscordRpcMonitorEvent>();
@@ -3782,52 +4017,84 @@ namespace BeacnMuteOverlay {
         }
 
         private static void Run(string applicationId, string redirectUri, string accessToken, string refreshToken, long expiresAtUnixSeconds, int generation) {
+            int retryCount = 0;
             try {
-                EmitStatus("Finding Discord's local connection...");
-                using (NamedPipeClientStream pipe = OpenPipe(generation)) {
-                    if (pipe == null) {
-                        EmitStatus("Discord's local connection was not found.");
-                        return;
-                    }
-                    lock (lifecycleLock) { activePipe = pipe; }
-                    SendFrame(pipe, 0, "{\"v\":1,\"client_id\":" + Quote(applicationId) + "}");
-                    IDictionary<string, object> ready = ReadPayload(pipe);
-                    if (!String.Equals(GetString(ready, "evt"), "READY", StringComparison.OrdinalIgnoreCase)) {
-                        EmitStatus("Discord did not accept this application ID.");
-                        return;
-                    }
-
-                    if (!String.IsNullOrWhiteSpace(accessToken) && expiresAtUnixSeconds > DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 30) {
-                        EmitStatus("Restoring the saved Discord connection...");
-                        SendCommand(pipe, "AUTHENTICATE", null, "{\"access_token\":" + Quote(accessToken) + "}");
-                    } else if (!String.IsNullOrWhiteSpace(refreshToken)) {
-                        EmitStatus("Refreshing the saved Discord connection...");
-                        string refreshedAccessToken;
-                        string refreshedRefreshToken;
-                        long refreshedExpiresAt;
-                        string refreshError;
-                        if (RefreshToken(applicationId, refreshToken, out refreshedAccessToken, out refreshedRefreshToken, out refreshedExpiresAt, out refreshError)) {
-                            EmitCredentials(refreshedAccessToken, refreshedRefreshToken, refreshedExpiresAt);
-                            SendCommand(pipe, "AUTHENTICATE", null, "{\"access_token\":" + Quote(refreshedAccessToken) + "}");
-                        } else {
-                            EmitStatus("Saved Discord connection expired. Waiting for authorization...");
-                            BeginAuthorization(pipe, applicationId, redirectUri);
-                        }
-                    } else {
-                        EmitStatus("Waiting for Discord authorization...");
-                        BeginAuthorization(pipe, applicationId, redirectUri);
-                    }
-                    while (!stopRequested && generation == runGeneration) {
-                        IDictionary<string, object> payload = ReadPayload(pipe);
-                        HandlePayload(pipe, applicationId, redirectUri, payload);
+                while (!stopRequested && generation == runGeneration) {
+                    try {
+                        RunSession(applicationId, redirectUri, ref accessToken, ref refreshToken, ref expiresAtUnixSeconds, generation);
+                        retryCount = 0;
+                    } catch (TerminalDiscordException error) {
+                        if (!stopRequested && generation == runGeneration) EmitStatus(CleanError(error.Message));
+                        break;
+                    } catch (Exception) {
+                        if (stopRequested || generation != runGeneration) break;
+                        SetVoiceState(false, false, false);
+                        retryCount++;
+                        int retrySeconds = Math.Min(15, Math.Max(2, retryCount * 2));
+                        EmitStatus("Discord disconnected. Reconnecting in " + retrySeconds + " seconds...");
+                        if (!WaitForRetry(retrySeconds, generation)) break;
+                    } finally {
+                        lock (lifecycleLock) { activePipe = null; }
                     }
                 }
-            } catch (Exception error) {
-                if (!stopRequested && generation == runGeneration) EmitStatus("Discord connection stopped: " + CleanError(error.Message));
             } finally {
                 lock (lifecycleLock) { activePipe = null; }
                 if (generation == runGeneration) SetVoiceState(false, false, false);
             }
+        }
+
+        private static void RunSession(string applicationId, string redirectUri, ref string accessToken, ref string refreshToken, ref long expiresAtUnixSeconds, int generation) {
+            currentChannelId = null;
+            currentUserId = null;
+            pendingCodeVerifier = null;
+            pendingRedirectUri = null;
+            EmitStatus("Finding Discord's local connection...");
+            using (NamedPipeClientStream pipe = OpenPipe(generation)) {
+                if (pipe == null) throw new IOException("Discord's local connection was not found.");
+                lock (lifecycleLock) { activePipe = pipe; }
+                SendFrame(pipe, 0, "{\"v\":1,\"client_id\":" + Quote(applicationId) + "}");
+                IDictionary<string, object> ready = ReadPayload(pipe);
+                if (!String.Equals(GetString(ready, "evt"), "READY", StringComparison.OrdinalIgnoreCase)) {
+                    throw new TerminalDiscordException("Discord did not accept this application ID.");
+                }
+
+                if (!String.IsNullOrWhiteSpace(accessToken) && expiresAtUnixSeconds > DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 30) {
+                    EmitStatus("Restoring the saved Discord connection...");
+                    SendCommand(pipe, "AUTHENTICATE", null, "{\"access_token\":" + Quote(accessToken) + "}");
+                } else if (!String.IsNullOrWhiteSpace(refreshToken)) {
+                    EmitStatus("Refreshing the saved Discord connection...");
+                    string refreshedAccessToken;
+                    string refreshedRefreshToken;
+                    long refreshedExpiresAt;
+                    string refreshError;
+                    if (RefreshToken(applicationId, refreshToken, out refreshedAccessToken, out refreshedRefreshToken, out refreshedExpiresAt, out refreshError)) {
+                        accessToken = refreshedAccessToken;
+                        refreshToken = refreshedRefreshToken;
+                        expiresAtUnixSeconds = refreshedExpiresAt;
+                        EmitCredentials(accessToken, refreshToken, expiresAtUnixSeconds);
+                        SendCommand(pipe, "AUTHENTICATE", null, "{\"access_token\":" + Quote(accessToken) + "}");
+                    } else {
+                        EmitStatus("Saved Discord connection expired. Waiting for authorization...");
+                        BeginAuthorization(pipe, applicationId, redirectUri);
+                    }
+                } else {
+                    EmitStatus("Waiting for Discord authorization...");
+                    BeginAuthorization(pipe, applicationId, redirectUri);
+                }
+                while (!stopRequested && generation == runGeneration) {
+                    IDictionary<string, object> payload = ReadPayload(pipe);
+                    HandlePayload(pipe, applicationId, redirectUri, payload, ref accessToken, ref refreshToken, ref expiresAtUnixSeconds);
+                }
+            }
+        }
+
+        private static bool WaitForRetry(int seconds, int generation) {
+            int slices = Math.Max(1, seconds * 10);
+            for (int index = 0; index < slices; index++) {
+                if (stopRequested || generation != runGeneration) return false;
+                Thread.Sleep(100);
+            }
+            return !stopRequested && generation == runGeneration;
         }
 
         private static NamedPipeClientStream OpenPipe(int generation) {
@@ -3842,7 +4109,7 @@ namespace BeacnMuteOverlay {
             return null;
         }
 
-        private static void HandlePayload(NamedPipeClientStream pipe, string applicationId, string redirectUri, IDictionary<string, object> payload) {
+        private static void HandlePayload(NamedPipeClientStream pipe, string applicationId, string redirectUri, IDictionary<string, object> payload, ref string accessToken, ref string refreshToken, ref long expiresAtUnixSeconds) {
             string command = GetString(payload, "cmd");
             string eventName = GetString(payload, "evt");
             IDictionary<string, object> data = AsDictionary(GetValue(payload, "data"));
@@ -3853,8 +4120,8 @@ namespace BeacnMuteOverlay {
                     BeginAuthorization(pipe, applicationId, redirectUri);
                     return;
                 }
-                EmitStatus("Discord: " + CleanError(GetString(data, "message")));
-                return;
+                string errorMessage = CleanError(GetString(data, "message"));
+                throw new TerminalDiscordException("Discord rejected the connection: " + errorMessage);
             }
 
             if (String.Equals(command, "AUTHORIZE", StringComparison.OrdinalIgnoreCase)) {
@@ -3865,15 +4132,17 @@ namespace BeacnMuteOverlay {
                 }
                 EmitStatus("Discord approved the connection. Signing in...");
                 string token;
-                string refreshToken;
+                string returnedRefreshToken;
                 long expiresAt;
                 string tokenError;
-                if (!ExchangeCode(applicationId, redirectUri, code, out token, out refreshToken, out expiresAt, out tokenError)) {
-                    EmitStatus("Discord sign-in could not finish: " + tokenError);
-                    return;
+                if (!ExchangeCode(applicationId, redirectUri, code, out token, out returnedRefreshToken, out expiresAt, out tokenError)) {
+                    throw new TerminalDiscordException("Discord sign-in could not finish: " + tokenError);
                 }
-                EmitCredentials(token, refreshToken, expiresAt);
-                SendCommand(pipe, "AUTHENTICATE", null, "{\"access_token\":" + Quote(token) + "}");
+                accessToken = token;
+                refreshToken = returnedRefreshToken;
+                expiresAtUnixSeconds = expiresAt;
+                EmitCredentials(accessToken, refreshToken, expiresAtUnixSeconds);
+                SendCommand(pipe, "AUTHENTICATE", null, "{\"access_token\":" + Quote(accessToken) + "}");
                 return;
             }
 
@@ -3881,8 +4150,7 @@ namespace BeacnMuteOverlay {
                 IDictionary<string, object> user = AsDictionary(GetValue(data, "user"));
                 currentUserId = GetString(user, "id");
                 if (String.IsNullOrWhiteSpace(currentUserId)) {
-                    EmitStatus("Discord did not return the signed-in user.");
-                    return;
+                    throw new TerminalDiscordException("Discord did not return the signed-in user.");
                 }
                 EmitStatus("Discord connected. Watching voice state.");
                 SendCommand(pipe, "SUBSCRIBE", "VOICE_CHANNEL_SELECT", "{}");
@@ -4090,11 +4358,21 @@ namespace BeacnMuteOverlay {
         }
 
         private static IDictionary<string, object> ReadPayload(Stream stream) {
-            string json = ReadFrame(stream);
-            object payload = new JavaScriptSerializer().DeserializeObject(json);
-            IDictionary<string, object> dictionary = AsDictionary(payload);
-            if (dictionary == null) throw new InvalidDataException("Discord sent an invalid message.");
-            return dictionary;
+            while (true) {
+                int opcode;
+                string json;
+                ReadFrame(stream, out opcode, out json);
+                if (opcode == 3) {
+                    SendFrame(stream, 4, json);
+                    continue;
+                }
+                if (opcode == 2) throw new IOException("Discord closed the local connection.");
+                if (opcode != 1) throw new InvalidDataException("Discord sent an unsupported RPC frame.");
+                object payload = new JavaScriptSerializer().DeserializeObject(json);
+                IDictionary<string, object> dictionary = AsDictionary(payload);
+                if (dictionary == null) throw new InvalidDataException("Discord sent an invalid message.");
+                return dictionary;
+            }
         }
 
         private static IDictionary<string, object> AsDictionary(object value) {
@@ -4130,17 +4408,19 @@ namespace BeacnMuteOverlay {
 
         private static void SendFrame(Stream stream, int opcode, string payload) {
             byte[] body = Encoding.UTF8.GetBytes(payload);
+            if (body.Length > 1024 * 1024) throw new InvalidDataException("The Discord RPC request is too large.");
             stream.Write(BitConverter.GetBytes(opcode), 0, 4);
             stream.Write(BitConverter.GetBytes(body.Length), 0, 4);
             stream.Write(body, 0, body.Length);
             stream.Flush();
         }
 
-        private static string ReadFrame(Stream stream) {
+        private static void ReadFrame(Stream stream, out int opcode, out string payload) {
             byte[] header = ReadExactly(stream, 8);
+            opcode = BitConverter.ToInt32(header, 0);
             int length = BitConverter.ToInt32(header, 4);
             if (length < 0 || length > 1024 * 1024) throw new InvalidDataException("Discord sent an invalid response.");
-            return Encoding.UTF8.GetString(ReadExactly(stream, length));
+            payload = Encoding.UTF8.GetString(ReadExactly(stream, length));
         }
 
         private static byte[] ReadExactly(Stream stream, int length) {
@@ -4209,6 +4489,7 @@ $script:mixCreateHardwareRequestId = 0L
 $script:mixCreateMappingGeneration = 0L
 $script:beacnHardwareLayoutSignature = ""
 $script:lastBeacnHardwareResultSequence = 0L
+$script:lastBeacnTelemetryWorkerGeneration = 0L
 $script:beacnOptimisticActionStates = @{}
 $script:mixCreateAudienceFaderIds = @()
 $script:mixCreateAllFaderIds = @()
@@ -4228,6 +4509,7 @@ $script:lastBeacnHotkeyMappingCheckUtc = [DateTime]::MinValue
 $script:beacnHotkeyMissingSinceUtc = [DateTime]::MinValue
 $script:beacnHotkeyEmptySinceUtc = [DateTime]::MinValue
 $script:pendingBeacnHotkeyRefreshes = @{}
+$script:pendingBeacnPointRefreshes = New-Object 'System.Collections.Generic.List[object]'
 
 if ($beacnAppScannerAvailable -and -not $script:useBeacnAccessibilityWorker) {
     try { [void](Update-BeacnScannerAdapterConfiguration -Adapter $script:beacnAdapterState -Force) } catch {
@@ -4347,7 +4629,8 @@ function Request-BeacnHardwareRefresh {
         [int]$Position,
         [long]$RequestId,
         [long]$MappingGeneration,
-        [bool]$MappingConfident
+        [bool]$MappingConfident,
+        [DateTime]$InputAtUtc = [DateTime]::UtcNow
     )
     if ($script:useBeacnAccessibilityWorker) {
         return Send-BeacnAccessibilityCommand -Client $script:beacnAccessibilityClient -Type HardwareRefresh -Data @{
@@ -4357,11 +4640,12 @@ function Request-BeacnHardwareRefresh {
             RequestId = $RequestId
             MappingGeneration = $MappingGeneration
             MappingConfident = $MappingConfident
+            InputAtUtcTicks = $InputAtUtc.Ticks
         }
     }
     try {
         [BeacnMuteOverlay.BeacnAppScanner]::RequestHardwareRefresh(
-            $PreferredName, $Mode, $Position, $RequestId, $MappingGeneration, $MappingConfident
+            $PreferredName, $Mode, $Position, $RequestId, $MappingGeneration, $MappingConfident, $InputAtUtc.Ticks
         )
         return $true
     } catch { return $false }
@@ -4472,13 +4756,96 @@ function Test-BeacnAppActionStateFresh {
     )
 }
 
+function Resolve-BeacnPublishedActionPoint {
+    param([double]$X, [double]$Y)
+
+    if (-not (Test-BeacnAppStateFresh)) { return $null }
+    $best = $null
+    $bestScore = $null
+    foreach ($state in @($script:beacnAppFaderStates)) {
+        foreach ($candidate in @(
+            [pscustomobject]@{ Prefix = 'AllAction'; Mode = 'All' },
+            [pscustomobject]@{ Prefix = 'AudienceAction'; Mode = 'Audience' }
+        )) {
+            $prefix = [string]$candidate.Prefix
+            $hasBounds = $state.PSObject.Properties["Has${prefix}Bounds"]
+            if ($null -eq $hasBounds -or -not [bool]$hasBounds.Value) { continue }
+            $left = [double]$state.("${prefix}Left")
+            $top = [double]$state.("${prefix}Top")
+            $right = [double]$state.("${prefix}Right")
+            $bottom = [double]$state.("${prefix}Bottom")
+            # The published label and its menu button share a short JUCE row.
+            # Include the adjacent button area without treating unrelated desktop
+            # clicks as BEACN actions that need repeated worker commands.
+            $score = Get-BeacnActionPointCandidateScore `
+                -X $X -Y $Y `
+                -Left $left -Top $top -Right $right -Bottom $bottom
+            if ($null -ne $score -and (Test-BeacnActionPointCandidatePreferred -Score $score -BestScore $bestScore)) {
+                $bestScore = $score
+                $best = [pscustomobject]@{ Name = [string]$state.Name; Mode = [string]$candidate.Mode }
+            }
+        }
+    }
+    return $best
+}
+
+function Add-BeacnPointRefreshFollowUps {
+    param([double]$X, [double]$Y)
+
+    while ($script:pendingBeacnPointRefreshes.Count -ge 32) {
+        $script:pendingBeacnPointRefreshes.RemoveAt(0)
+    }
+    [void]$script:pendingBeacnPointRefreshes.Add([pscustomobject]@{
+        X = $X
+        Y = $Y
+        DueUtc = [DateTime]::UtcNow.AddMilliseconds(80)
+        Remaining = 3
+    })
+}
+
+function Invoke-BeacnPointRefreshFollowUps {
+    $now = [DateTime]::UtcNow
+    for ($index = $script:pendingBeacnPointRefreshes.Count - 1; $index -ge 0; $index--) {
+        $pending = $script:pendingBeacnPointRefreshes[$index]
+        if ($null -eq $pending -or $now -lt [DateTime]$pending.DueUtc) { continue }
+        [void](Request-BeacnPointRefresh -X ([double]$pending.X) -Y ([double]$pending.Y))
+        $pending.Remaining = [int]$pending.Remaining - 1
+        if ([int]$pending.Remaining -le 0) {
+            $script:pendingBeacnPointRefreshes.RemoveAt($index)
+        } else {
+            $delay = if ([int]$pending.Remaining -eq 2) { 140 } else { 280 }
+            $pending.DueUtc = $now.AddMilliseconds($delay)
+        }
+    }
+}
+
 function Update-BeacnDesktopClickActions {
     if (-not $mouseHookAvailable) { return }
     if ($script:useBeacnAccessibilityWorker) {
+        Invoke-BeacnPointRefreshFollowUps
         $workerClickX = 0
         $workerClickY = 0
         while ([BeacnMuteOverlay.KeyboardInput]::ConsumeLeftClick([ref]$workerClickX, [ref]$workerClickY)) {
-            [void](Request-BeacnPointRefresh -X ([double]$workerClickX) -Y ([double]$workerClickY))
+            $publishedTarget = Resolve-BeacnPublishedActionPoint -X ([double]$workerClickX) -Y ([double]$workerClickY)
+            $shouldFollowUp = $null -ne $publishedTarget
+            if (
+                $shouldFollowUp -and
+                (Test-BeacnHotkeyOptimisticActionAllowed -Name ([string]$publishedTarget.Name))
+            ) {
+                [void](Set-BeacnOptimisticAction `
+                    -Name ([string]$publishedTarget.Name) `
+                    -Mode ([string]$publishedTarget.Mode) `
+                    -MaximumAgeSeconds 4.0)
+                Write-BeacnStateLog -Message (
+                    'REQUEST desktop {0}/{1}; preview=1' -f $publishedTarget.Name, $publishedTarget.Mode
+                )
+            }
+            if (
+                (Request-BeacnPointRefresh -X ([double]$workerClickX) -Y ([double]$workerClickY)) -and
+                $shouldFollowUp
+            ) {
+                Add-BeacnPointRefreshFollowUps -X ([double]$workerClickX) -Y ([double]$workerClickY)
+            }
             $workerClickX = 0
             $workerClickY = 0
         }
@@ -4652,6 +5019,14 @@ function Resolve-BeacnHotkeyLiveFaderName {
 function Test-BeacnHotkeyOptimisticActionAllowed {
     param([string]$Name)
 
+    $now = [DateTime]::UtcNow
+    $hasActivePreview = (
+        -not [string]::IsNullOrWhiteSpace($Name) -and
+        $script:beacnOptimisticActionStates.ContainsKey($Name) -and
+        (Test-BeacnOptimisticActionStateActive `
+            -State $script:beacnOptimisticActionStates[$Name] `
+            -Now $now)
+    )
     $telemetry = Get-BeacnScannerTelemetry
     if ($null -eq $telemetry) { return $false }
     $geometryProperty = $telemetry.PSObject.Properties['GeometryRefreshInProgress']
@@ -4664,8 +5039,11 @@ function Test-BeacnHotkeyOptimisticActionAllowed {
         $health = Get-BeacnCoordinatorHealth `
             -Coordinator $script:beacnStateCoordinator `
             -WorkerRunning $true `
-            -Now ([DateTime]::UtcNow)
-        if ([string]$health.Status -ne 'Healthy') { return $false }
+            -Now $now
+        if (
+            [string]$health.Status -ne 'Healthy' -and
+            -not ($hasActivePreview -and [string]$health.Status -eq 'Synchronizing')
+        ) { return $false }
     }
 
     $faderPresent = (
@@ -4679,7 +5057,7 @@ function Test-BeacnHotkeyOptimisticActionAllowed {
     $stateAgeSeconds = if ($script:lastBeacnAppScanSuccess -eq [DateTime]::MinValue) {
         [double]::PositiveInfinity
     } else {
-        ([DateTime]::UtcNow - $script:lastBeacnAppScanSuccess).TotalSeconds
+        ($now - $script:lastBeacnAppScanSuccess).TotalSeconds
     }
     return Test-BeacnAuthoritativePreviewAllowed `
         -HasActionAuthority ([bool]$script:beacnAppHasActionAuthority) `
@@ -4687,7 +5065,8 @@ function Test-BeacnHotkeyOptimisticActionAllowed {
         -StateAgeSeconds $stateAgeSeconds `
         -CompatibilityStatus ([string]$script:beacnAdapterState.CompatibilityStatus) `
         -FaderPresent $faderPresent `
-        -ActionStateKnown $actionStateKnown
+        -ActionStateKnown $actionStateKnown `
+        -PendingPreviewContinuation $hasActivePreview
 }
 
 function Request-BeacnHotkeyFaderRefresh {
@@ -5214,13 +5593,56 @@ function Publish-BeacnAdapterResult {
     $script:beacnAppNeedsConfirmation = [bool]$AdapterResult.NeedsConfirmation
     $script:lastBeacnAppScanSuccess = $Now
 
+    # A no-edge hardware result requests an urgent second opinion. Reconcile only
+    # when that fader publishes a *new committed* action revision, never against
+    # the prior cached state that existed when the physical input was received.
+    foreach ($state in @($script:beacnAppFaderStates)) {
+        $name = [string]$state.Name
+        if ([string]::IsNullOrWhiteSpace($name) -or -not $script:beacnOptimisticActionStates.ContainsKey($name)) { continue }
+        $optimisticState = $script:beacnOptimisticActionStates[$name]
+        $hardwareReconciled = $false
+        $committedRevisionProperty = $state.PSObject.Properties['CommittedActionRevision']
+        $committedRevision = if ($null -eq $committedRevisionProperty) { 0L } else { [long]$committedRevisionProperty.Value }
+        foreach ($action in @(
+            [pscustomobject]@{ Mode = 'All'; ValueProperty = 'AllActive'; RequestProperty = 'AllRequestId'; VerificationRequestProperty = 'AllVerificationRequestId'; VerificationRevisionProperty = 'AllVerificationAfterRevision' },
+            [pscustomobject]@{ Mode = 'Audience'; ValueProperty = 'AudienceActive'; RequestProperty = 'AudienceRequestId'; VerificationRequestProperty = 'AudienceVerificationRequestId'; VerificationRevisionProperty = 'AudienceVerificationAfterRevision' }
+        )) {
+            $verificationRequest = $optimisticState.PSObject.Properties[$action.VerificationRequestProperty]
+            $verificationRevision = $optimisticState.PSObject.Properties[$action.VerificationRevisionProperty]
+            $activeRequest = $optimisticState.PSObject.Properties[$action.RequestProperty]
+            if ($null -eq $verificationRequest -or $null -eq $verificationRevision -or $null -eq $activeRequest) { continue }
+            if (
+                [long]$verificationRequest.Value -le 0 -or
+                [long]$verificationRequest.Value -ne [long]$activeRequest.Value -or
+                $committedRevision -le [long]$verificationRevision.Value
+            ) { continue }
+            $optimisticState.($action.ValueProperty) = [bool]$state.($action.ValueProperty)
+            $optimisticState.($action.RequestProperty) = 0L
+            $optimisticState.($action.VerificationRequestProperty) = 0L
+            $optimisticState.($action.VerificationRevisionProperty) = 0L
+            $hardwareReconciled = $true
+            Write-BeacnStateLog -Message (
+                'HARDWARE verification reconciled source={0}; mode={1}; committedRevision={2}' -f `
+                    $name, $action.Mode, $committedRevision
+            )
+        }
+        if (
+            $hardwareReconciled -and
+            [long]$optimisticState.AllRequestId -eq 0 -and
+            [long]$optimisticState.AudienceRequestId -eq 0
+        ) {
+            [void]$script:beacnOptimisticActionStates.Remove($name)
+        }
+    }
+
     if ([bool]$AdapterResult.Accepted) {
         foreach ($state in @($script:beacnAppFaderStates)) {
             $name = [string]$state.Name
             if ([string]::IsNullOrWhiteSpace($name)) { continue }
             $faderId = [int]$state.Order
-            $script:mixCreateAudienceMute[$faderId] = [bool]$state.AudienceActive
-            $script:mixCreateAllMuteByName[$name] = [bool]$state.AllActive
+            $stateKnown = [bool]$state.ActionStateKnown
+            $script:mixCreateAudienceMute[$faderId] = ($stateKnown -and [bool]$state.AudienceActive)
+            $script:mixCreateAllMuteByName[$name] = ($stateKnown -and [bool]$state.AllActive)
             if ($script:mixCreateActionModesByName.ContainsKey($name)) {
                 [void]$script:mixCreateActionModesByName.Remove($name)
             }
@@ -5259,7 +5681,18 @@ function Update-BeacnAppFaderState {
                     -Coordinator $script:beacnStateCoordinator `
                     -Snapshot $providerSnapshot `
                     -Now $now
-                Update-BeacnHardwareRefreshResult -Telemetry $providerSnapshot
+                $workerGeneration = [long]$coordinatorResult.WorkerGeneration
+                if ($workerGeneration -ne [long]$script:lastBeacnTelemetryWorkerGeneration) {
+                    $previousWorkerGeneration = [long]$script:lastBeacnTelemetryWorkerGeneration
+                    $script:lastBeacnTelemetryWorkerGeneration = $workerGeneration
+                    $script:lastBeacnHardwareResultSequence = 0L
+                    if ($previousWorkerGeneration -gt 0) {
+                        Invalidate-BeacnHardwareMapping -Reason "accessibility worker replaced"
+                    }
+                }
+                if ([bool]$coordinatorResult.ProviderAccepted) {
+                    Update-BeacnHardwareRefreshResult -Telemetry $providerSnapshot
+                }
                 if ([bool]$coordinatorResult.Accepted -and [bool]$coordinatorResult.Publishable) {
                     Publish-BeacnAdapterResult -AdapterResult $coordinatorResult.AdapterResult -Now $now
                     if ($LogBeacnState) {
@@ -5614,15 +6047,24 @@ function Test-BeacnOptimisticActionAllowed {
     )
 
     if ([string]::IsNullOrWhiteSpace($Name) -or -not $MappingConfident) { return $false }
+    if ($Position -lt 0 -or $Position -gt 3) { return $false }
+    $now = [DateTime]::UtcNow
     $faderPresent = $script:beacnAppFaderStatesByName.ContainsKey($Name)
     $actionStateKnown = $faderPresent -and [bool]$script:beacnAppFaderStatesByName[$Name].ActionStateKnown
+    $hasActivePreview = (
+        $script:beacnOptimisticActionStates.ContainsKey($Name) -and
+        (Test-BeacnOptimisticActionStateActive `
+            -State $script:beacnOptimisticActionStates[$Name] `
+            -Now $now)
+    )
     $previewAllowed = Test-BeacnAuthoritativePreviewAllowed `
         -HasActionAuthority ([bool]$script:beacnAppHasActionAuthority) `
         -NeedsConfirmation ([bool]$script:beacnAppNeedsConfirmation) `
-        -StateAgeSeconds (([DateTime]::UtcNow - $script:lastBeacnAppScanSuccess).TotalSeconds) `
+        -StateAgeSeconds (($now - $script:lastBeacnAppScanSuccess).TotalSeconds) `
         -CompatibilityStatus ([string]$script:beacnAdapterState.CompatibilityStatus) `
         -FaderPresent $faderPresent `
-        -ActionStateKnown $actionStateKnown
+        -ActionStateKnown $actionStateKnown `
+        -PendingPreviewContinuation $hasActivePreview
     if (-not $previewAllowed) { return $false }
     $mappedName = Get-MixCreatePhysicalFaderName -Position $Position
     return [string]::Equals($mappedName, $Name, [StringComparison]::OrdinalIgnoreCase)
@@ -5633,7 +6075,8 @@ function Set-BeacnOptimisticAction {
         [string]$Name,
         [ValidateSet("All", "Audience")][string]$Mode,
         [long]$RequestId = 0,
-        [int]$Position = -1
+        [int]$Position = -1,
+        [double]$MaximumAgeSeconds = 0.85
     )
 
     if (
@@ -5654,7 +6097,8 @@ function Set-BeacnOptimisticAction {
         -Mode $Mode `
         -Now ([DateTime]::UtcNow) `
         -RequestId $RequestId `
-        -Position $Position
+        -Position $Position `
+        -MaximumAgeSeconds $MaximumAgeSeconds
     return $true
 }
 
@@ -5715,6 +6159,28 @@ function Update-BeacnHardwareRefreshResult {
                     [void]$script:beacnOptimisticActionStates.Remove($predictedName)
                     Write-BeacnStateLog -Message (
                         "HARDWARE discarded orphan prediction={0}; request={1}" -f $predictedName, $requestId
+                    )
+                    return
+                }
+                if ([string]::IsNullOrWhiteSpace($confirmedName)) {
+                    # A hardware refresh that did not see an edge is not a
+                    # contradictory BEACN observation. All-mode redraws can expose
+                    # the old action row briefly after the physical press. Keep the
+                    # request-owned preview, then reconcile it only after a new,
+                    # committed UI Automation observation of this exact fader.
+                    $baselineRevisionProperty = $authoritativeState.PSObject.Properties['CommittedActionRevision']
+                    $baselineRevision = if ($null -eq $baselineRevisionProperty) { 0L } else { [long]$baselineRevisionProperty.Value }
+                    if ($mode -eq 'All') {
+                        $optimisticState.AllVerificationRequestId = $requestId
+                        $optimisticState.AllVerificationAfterRevision = $baselineRevision
+                    } else {
+                        $optimisticState.AudienceVerificationRequestId = $requestId
+                        $optimisticState.AudienceVerificationAfterRevision = $baselineRevision
+                    }
+                    [void](Request-BeacnFaderRefresh -Name $predictedName -Mode $mode -Urgent)
+                    Write-BeacnStateLog -Message (
+                        'HARDWARE verification queued prediction={0}; mode={1}; request={2}; committedRevision={3}' -f `
+                            $predictedName, $mode, $requestId, $baselineRevision
                     )
                     return
                 }
@@ -6208,6 +6674,17 @@ function Update-MixCreateAudienceState {
     while ($processedPacketCount -lt 512 -and $script:mixCreateMonitor.TryDequeue([ref]$packet)) {
         $processedPacketCount++
         $data = $packet.Data
+        $inputAtUtc = [DateTime]::UtcNow
+        $capturedAtProperty = $packet.PSObject.Properties['CapturedAtUtc']
+        if ($null -ne $capturedAtProperty) {
+            try {
+                $candidateInputAtUtc = ([DateTime]$capturedAtProperty.Value).ToUniversalTime()
+                $inputAgeSeconds = ($inputAtUtc - $candidateInputAtUtc).TotalSeconds
+                if ($inputAgeSeconds -ge 0 -and $inputAgeSeconds -le 5) {
+                    $inputAtUtc = $candidateInputAtUtc
+                }
+            } catch {}
+        }
 
         # Mix Create exposes independent physical controls in one status report:
         # the low nibble is knob presses (Mute to All), the high nibble is the
@@ -6252,7 +6729,7 @@ function Update-MixCreateAudienceState {
             } elseif ($knobButton -ne $script:mixCreatePressedKnobButton) {
                 $script:mixCreatePressedKnobButton = $knobButton
                 $position = Get-MixCreateButtonPosition -Mask $knobButton
-                if (Test-BeacnAppActionStateFresh) {
+                if (Test-BeacnAppStateFresh) {
                     # Position selects the first row to inspect; BEACN's displayed
                     # action state still decides the result. The scanner searches
                     # the other rows automatically if this page hint is stale.
@@ -6267,7 +6744,8 @@ function Update-MixCreateAudienceState {
                             -Name $preferredName `
                             -Mode "All" `
                             -RequestId $requestId `
-                            -Position $position)
+                            -Position $position `
+                            -MaximumAgeSeconds 4.0)
                     }
                     [void](Request-BeacnHardwareRefresh `
                         -PreferredName $preferredName `
@@ -6275,7 +6753,8 @@ function Update-MixCreateAudienceState {
                         -Position $position `
                         -RequestId $requestId `
                         -MappingGeneration $mappingGeneration `
-                        -MappingConfident $mappingConfident)
+                        -MappingConfident $mappingConfident `
+                        -InputAtUtc $inputAtUtc)
                     Write-BeacnStateLog -Message (
                         "REQUEST hardware All; position={0}; preferred={1}; optimistic={2}; confidence={3}; request={4}; mapGeneration={5}" -f `
                             $position, $preferredName, [int]$optimistic, [int]$mappingConfident, $requestId, $mappingGeneration
@@ -6293,7 +6772,7 @@ function Update-MixCreateAudienceState {
             } elseif ($audienceButton -ne $script:mixCreatePressedAudienceButton) {
                 $script:mixCreatePressedAudienceButton = $audienceButton
                 $position = Get-MixCreateButtonPosition -Mask $audienceButton -Audience
-                if (Test-BeacnAppActionStateFresh) {
+                if (Test-BeacnAppStateFresh) {
                     $preferredName = Get-MixCreatePhysicalFaderName -Position $position
                     $script:mixCreateHardwareRequestId++
                     $requestId = [long]$script:mixCreateHardwareRequestId
@@ -6305,7 +6784,8 @@ function Update-MixCreateAudienceState {
                             -Name $preferredName `
                             -Mode "Audience" `
                             -RequestId $requestId `
-                            -Position $position)
+                            -Position $position `
+                            -MaximumAgeSeconds 4.0)
                     }
                     [void](Request-BeacnHardwareRefresh `
                         -PreferredName $preferredName `
@@ -6313,7 +6793,8 @@ function Update-MixCreateAudienceState {
                         -Position $position `
                         -RequestId $requestId `
                         -MappingGeneration $mappingGeneration `
-                        -MappingConfident $mappingConfident)
+                        -MappingConfident $mappingConfident `
+                        -InputAtUtc $inputAtUtc)
                     Write-BeacnStateLog -Message (
                         "REQUEST hardware Audience; position={0}; preferred={1}; optimistic={2}; confidence={3}; request={4}; mapGeneration={5}" -f `
                             $position, $preferredName, [int]$optimistic, [int]$mappingConfident, $requestId, $mappingGeneration
@@ -6428,22 +6909,23 @@ function Get-MixCreateMutedSources {
             $name = [string]$state.Name
             if ([string]::IsNullOrWhiteSpace($name)) { continue }
 
-            $allActive = [bool]$state.AllActive
-            $audienceActive = [bool]$state.AudienceActive
-            if ($script:beacnOptimisticActionStates.ContainsKey($name)) {
-                $optimisticState = $script:beacnOptimisticActionStates[$name]
-                $displayState = Resolve-BeacnDisplayedActionState `
-                    -AuthoritativeAllActive $allActive `
-                    -AuthoritativeAudienceActive $audienceActive `
-                    -OptimisticState $optimisticState `
-                    -Now ([DateTime]::UtcNow)
-                if (-not [bool]$displayState.UseOptimistic) {
-                    [void]$script:beacnOptimisticActionStates.Remove($name)
-                } else {
-                    $allActive = [bool]$displayState.AllActive
-                    $audienceActive = [bool]$displayState.AudienceActive
-                }
+            $hasOptimisticState = $script:beacnOptimisticActionStates.ContainsKey($name)
+            $optimisticState = if ($hasOptimisticState) {
+                $script:beacnOptimisticActionStates[$name]
+            } else {
+                $null
             }
+            $displayState = Resolve-BeacnDisplayedActionState `
+                -AuthoritativeAllActive ([bool]$state.AllActive) `
+                -AuthoritativeAudienceActive ([bool]$state.AudienceActive) `
+                -AuthoritativeStateKnown ([bool]$state.ActionStateKnown) `
+                -OptimisticState $optimisticState `
+                -Now ([DateTime]::UtcNow)
+            if ($hasOptimisticState -and -not [bool]$displayState.UseOptimistic) {
+                [void]$script:beacnOptimisticActionStates.Remove($name)
+            }
+            $allActive = [bool]$displayState.AllActive
+            $audienceActive = [bool]$displayState.AudienceActive
             if ($allActive -and $selectedAllNames -contains $name) {
                 [void]$sources.Add(("BEACN {0}: muted to all" -f $name))
             }
@@ -6912,6 +7394,8 @@ function Update-DiscordRpcState {
                     ([string]$update.Status).IndexOf("Finding Discord", [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
                     ([string]$update.Status).IndexOf("Restoring", [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
                     ([string]$update.Status).IndexOf("Refreshing", [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
+                    ([string]$update.Status).IndexOf("Waiting for Discord authorization", [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
+                    ([string]$update.Status).IndexOf("Reconnecting", [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
                     ([string]$update.Status).IndexOf("Connecting", [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
                     ([string]$update.Status).IndexOf("Signing in", [System.StringComparison]::OrdinalIgnoreCase) -ge 0
                 )
@@ -7815,6 +8299,15 @@ $discordConnectedPanel.Margin = "0,10,0,0"
 $discordMicDetect = Add-SettingToggle -Container $discordConnectedPanel -Text "Microphone muted" -Checked ([bool]$settings.DiscordMicDetect)
 $discordDeafenDetect = Add-SettingToggle -Container $discordConnectedPanel -Text "Deafened" -Checked ([bool]$settings.DiscordDeafenDetect)
 [void]$discordBody.Children.Add($discordRpcActions)
+
+$discordVoiceChannelNote = New-Object System.Windows.Controls.TextBlock
+$discordVoiceChannelNote.Text = "NOTE: MUST BE IN A VOICE CHANNEL OR CALL FOR THE OVERLAY TO WORK"
+$discordVoiceChannelNote.Foreground = $uiMuted
+$discordVoiceChannelNote.FontSize = 11
+$discordVoiceChannelNote.FontWeight = "SemiBold"
+$discordVoiceChannelNote.Margin = "0,6,0,0"
+$discordVoiceChannelNote.TextWrapping = "Wrap"
+[void]$discordBody.Children.Add($discordVoiceChannelNote)
 
 $beacnBody = $beacnPage.Panel
 $beacnDirectDetect = Add-SettingToggle -Container $beacnBody -Text "Monitor BEACN hardware" -Checked ([bool]$settings.BeacnDirectDetect)

@@ -4,6 +4,7 @@ param(
     [string]$TimestampServer,
     [string]$DiscordApplicationId,
     [switch]$RequireSigning,
+    [switch]$RequireDiscordPublicClient,
     [switch]$SkipTests
 )
 
@@ -11,7 +12,7 @@ $ErrorActionPreference = "Stop"
 $overlayDirectory = Split-Path -Parent $MyInvocation.MyCommand.Path
 $manifestPath = Join-Path $overlayDirectory "MuteCue.ReleaseManifest.json"
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-if ([int]$manifest.schemaVersion -ne 1 -or [string]::IsNullOrWhiteSpace([string]$manifest.version)) {
+if ([int]$manifest.schemaVersion -ne 1 -or [string]$manifest.version -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$') {
     throw "The release manifest is invalid."
 }
 if ($RequireSigning -and [string]::IsNullOrWhiteSpace($SigningCertificateThumbprint)) {
@@ -21,8 +22,8 @@ if ($RequireSigning -and [string]::IsNullOrWhiteSpace($TimestampServer)) {
     throw "A public release requires -TimestampServer when -RequireSigning is used."
 }
 $discordConfigured = $DiscordApplicationId -match '^\d{17,22}$'
-if ($RequireSigning -and -not $discordConfigured) {
-    throw "A public release requires -DiscordApplicationId for the built-in Discord public client."
+if ($RequireDiscordPublicClient -and -not $discordConfigured) {
+    throw "This release requires -DiscordApplicationId for the built-in Discord public client."
 }
 if (-not [string]::IsNullOrWhiteSpace($DiscordApplicationId) -and -not $discordConfigured) {
     throw "DiscordApplicationId must contain 17 to 22 digits when supplied."
@@ -134,7 +135,10 @@ try {
     [IO.File]::WriteAllText($checksumPath, "$archiveHash  $([IO.Path]::GetFileName($archivePath))`r`n", (New-Object Text.UTF8Encoding($false)))
     & (Join-Path $overlayDirectory "Test-MuteCueReleaseArtifact.ps1") `
         -ArchivePath $archivePath `
-        -ChecksumPath $checksumPath | Out-Host
+        -ChecksumPath $checksumPath `
+        -ExpectedVersion ([string]$manifest.version) `
+        -RequireSigning:$RequireSigning `
+        -RequireDiscordPublicClient:$RequireDiscordPublicClient | Out-Host
     Write-Output ("Mute Cue {0} release: PASS" -f [string]$manifest.version)
     Write-Output $archivePath
     Write-Output $checksumPath

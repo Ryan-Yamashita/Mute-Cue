@@ -4,11 +4,11 @@
     "assemblyName":  "MuteCue.Accessibility",
     "assemblyVersion":  "0.5.0.0",
     "contractVersion":  1,
-    "sha256":  "6157c345349376f38f67a319a1809801740b10893c6dfa0c9c9b76c14847e2e6",
-    "sourceSha256":  "cd30223b1d988e69d592cb00da7a76171eaaf10411a5141bcc0ca9bdefcb6aa9",
+    "sha256":  "7d59551ff3a002d78367d3d0e8f35a040e3825964a140088e81bd2b9abb4a247",
+    "sourceSha256":  "923ef72e23d07de662b6e0cca33a55833c6fed8a62b75144575c8b3030dfbb3a",
     "authenticodeSigned":  false,
     "signerThumbprint":  "",
     "authenticodeTimestamped":  false,
     "timestampSignerThumbprint":  "",
-    "builtAtUtc":  "2026-07-15T02:39:19.3092291Z"
+    "builtAtUtc":  "2026-07-15T17:52:29.7271089Z"
 }

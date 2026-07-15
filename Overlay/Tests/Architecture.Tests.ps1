@@ -58,6 +58,10 @@ $requiredPatterns = [ordered]@{
     "bounded Discord queue" = "MaximumQueuedEvents"
     "USB child process ownership" = "JobObjectLimitKillOnJobClose"
     "Discord HTTP timeout" = "request.Timeout = 10000"
+    "Discord reconnect loop" = "Discord disconnected. Reconnecting in"
+    "interruptible Discord reconnect" = "WaitForRetry"
+    "Discord reconnect session reset" = "pendingCodeVerifier = null;"
+    "Discord RPC ping response" = "SendFrame(stream, 4, json)"
     "runtime fault boundary" = "A monitoring update failed; the next update will retry."
 }
 foreach ($entry in $requiredPatterns.GetEnumerator()) {
@@ -93,6 +97,15 @@ $coordinatorSource = [IO.File]::ReadAllText((Join-Path $overlayDirectory "BeacnS
 foreach ($workerGuarantee in @("SessionToken", "WorkerInstanceId", "LastSnapshotSequence", "DiscoveryTimeoutSeconds", "ScanInProgressMilliseconds", "maximumScanDurationMilliseconds")) {
     if (-not $clientSource.Contains($workerGuarantee) -and -not $hostSource.Contains($workerGuarantee)) {
         throw "The isolated worker protocol is missing '$workerGuarantee'."
+    }
+}
+foreach ($stateEnvelopeGuarantee in @(
+    'lastCompletedStateRevision',
+    'lastCompletedStateCapturedAtUtc',
+    "GetFiles(`$commandPath, '*.json')"
+)) {
+    if (-not $hostSource.Contains($stateEnvelopeGuarantee)) {
+        throw "The isolated worker is missing state-envelope guarantee '$stateEnvelopeGuarantee'."
     }
 }
 if ($hostSource.Contains("Add-Type -TypeDefinition")) {
@@ -159,6 +172,21 @@ foreach ($fastInputGuarantee in @('FromMilliseconds(15)', 'Invoke-BeacnHotkeyGes
         throw "The fast input path is missing '$fastInputGuarantee'."
     }
 }
+foreach ($exactHardwareEventGuarantee in @('QueueUrgentFaderRefresh(name, mask)', '? 21', '? 26', 'coalescing urgent dictionary')) {
+    if (-not $source.Contains($exactHardwareEventGuarantee)) {
+        throw "Unknown-page hardware events must prioritize an exact rendered fader reread ('$exactHardwareEventGuarantee')."
+    }
+}
+foreach ($hardwareCorrelationGuarantee in @('recentPersonalOutputEdges', 'recentAudienceOutputEdges', 'OutputEdgePreRequestToleranceMilliseconds', 'InputAtUtcTicks', 'IsCorrelatedUniqueOutputEdge', 'ShouldCompletePreferredHardwareRead')) {
+    if (-not $source.Contains($hardwareCorrelationGuarantee)) {
+        throw "Unknown-page hardware calibration must correlate one exact, recent output edge ('$hardwareCorrelationGuarantee')."
+    }
+}
+foreach ($desktopPointGuarantee in @('Get-BeacnActionPointCandidateScore', 'Test-BeacnActionPointCandidatePreferred', '$bestScore = $null')) {
+    if (-not $source.Contains($desktopPointGuarantee) -and -not $actionStateSource.Contains($desktopPointGuarantee)) {
+        throw "Desktop action-point resolution must prefer the nearest exact BEACN row ('$desktopPointGuarantee')."
+    }
+}
 foreach ($workerCadenceGuarantee in @('$idleScanCadenceMilliseconds = 2000', '$scanRequested', 'WaitForChanged($watchTypes, 60)', '$shouldPublish')) {
     if (-not $hostSource.Contains($workerCadenceGuarantee)) {
         throw "The accessibility worker cadence is missing '$workerCadenceGuarantee'."
@@ -220,7 +248,10 @@ foreach ($latencyGuarantee in @(
     '$hotkeyInputTimer.Interval = [TimeSpan]::FromMilliseconds(15)',
     'one[stalest.Name] = 15',
     'Request-BeacnFaderRefresh -Name $resolvedName -Mode $Mode -Rendered -Urgent',
-    'Set-BeacnOptimisticAction'
+    'Set-BeacnOptimisticAction',
+    'preferredRetryDelays',
+    'pendingBeacnPointRefreshes',
+    'ActionRevision'
 )) {
     if (-not $source.Contains($latencyGuarantee)) {
         throw "The low-latency BEACN action path is missing '$latencyGuarantee'."
@@ -231,10 +262,24 @@ $ordinaryDrain = $source.IndexOf('DrainActionRefreshes(pendingActionRefreshes', 
 if ($urgentDrain -lt 0 -or $ordinaryDrain -lt 0 -or $urgentDrain -ge $ordinaryDrain) {
     throw 'Urgent shortcut refreshes must be drained before ordinary background row work.'
 }
+$hardwareDequeueAfterUrgent = $source.IndexOf('TryDequeueHardwareRefresh(out hardwareRequest)', $urgentDrain, [StringComparison]::Ordinal)
+if ($hardwareDequeueAfterUrgent -lt 0 -or $urgentDrain -ge $hardwareDequeueAfterUrgent) {
+    throw 'Urgent exact-name refreshes must be able to interrupt hardware page recovery.'
+}
+$hardwareRefreshMatch = [regex]::Match(
+    $source,
+    '(?s)private static HardwareRefreshCompletion RefreshHardwareActionState.*?private static bool TryReadActionRow'
+)
+if (-not $hardwareRefreshMatch.Success) { throw 'The physical hardware refresh path could not be inspected.' }
+$confidentCompletionIndex = $hardwareRefreshMatch.Value.IndexOf('if (request.MappingConfident)', [StringComparison]::Ordinal)
+$fallbackWalkIndex = $hardwareRefreshMatch.Value.IndexOf('if (request.FallbackIndex < 0) request.FallbackIndex = 0', [StringComparison]::Ordinal)
+if ($confidentCompletionIndex -lt 0 -or $fallbackWalkIndex -lt 0 -or $confidentCompletionIndex -ge $fallbackWalkIndex) {
+    throw 'A confident hardware mapping must finish without walking unrelated faders.'
+}
 if (-not $source.Contains('? 5') -or -not $source.Contains('? 10')) {
     throw 'Explicit hardware refreshes must retain the rendered-row probe bits.'
 }
-if ([regex]::Matches($source, '-MappingConfident\s+\$mappingConfident\)').Count -ne 4) {
+if ([regex]::Matches($source, '-MappingConfident\s+\$mappingConfident').Count -ne 4) {
     throw 'Both hardware action modes must carry page confidence into the scanner.'
 }
 if ($source.Contains('RefreshOutputBaseline')) {
@@ -262,7 +307,7 @@ if ($geometryFenceIndex -lt 0 -or $hardwareCommitIndex -lt 0 -or $hardwareCommit
     throw 'Hardware results must remain staged until after the native-geometry fence.'
 }
 $gitIgnore = [System.IO.File]::ReadAllText((Join-Path (Split-Path -Parent $overlayDirectory) ".gitignore"))
-foreach ($privatePattern in @(".discord-client-secret.dat", ".discord-authorization.dat", "*.pcapng", "Settings/", "*.pfx", "*.p12", "*.key")) {
+foreach ($privatePattern in @(".discord-client-secret.dat", ".discord-authorization.dat", "MuteCue.DiscordPublicClient.local.json", "*.pcapng", "Settings/", "*.pfx", "*.p12", "*.key")) {
     if (-not $gitIgnore.Contains($privatePattern)) { throw "Git ignore is missing private pattern '$privatePattern'." }
 }
 if ($source.Contains('RequestHardwareRefresh($preferredName, "All", $position)')) {

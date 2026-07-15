@@ -10,7 +10,7 @@ Mix Create USB ------> bounded wake-up hints -----------^
 Discord local RPC ---> bounded confirmed events -------------------------------> overlay
 ```
 
-The BEACN desktop client is authoritative. Mouse clicks, configured knob-mute shortcuts, and Mix Create packets request faster rereads; they never decide the final mute state. Mute Cue reads BEACN's own global Knob Mute assignments, listens only for those exact gestures, and gives the mapped All row an urgent rendered-first reread. When the existing state is fresh and fully authoritative, a shortcut may show the same short-lived expected-result preview used by confident hardware presses; two matching real BEACN reads replace or retract it. The pass-through listener retains no unrelated keystrokes, bounds its event queue, suppresses key-repeat until release, and keeps the last valid assignment snapshot during a transient BEACN file rewrite.
+The BEACN desktop client is authoritative. Mouse clicks, configured knob-mute shortcuts, and Mix Create packets request faster rereads; they never decide the final mute state. Mute Cue reads BEACN's own global Knob Mute assignments, listens only for those exact gestures, and gives the mapped All row an urgent rendered-first reread. When the existing state is fresh and fully authoritative, a shortcut may show the same short-lived expected-result preview used by confident hardware presses; two matching real BEACN reads replace or retract it. While those reads are pending, the last committed state remains the stable rendering base and only the same fader's unexpired preview may accept another ordered press. Authority is withheld during confirmation without inserting an artificial unknown frame. The pass-through listener retains no unrelated keystrokes, bounds its event queue, suppresses key-repeat until release, and keeps the last valid assignment snapshot during a transient BEACN file rewrite.
 
 ## Process boundaries
 
@@ -25,6 +25,7 @@ The protocol has these guarantees:
 - a random session token authenticates commands and snapshots;
 - every worker has a unique instance ID;
 - every snapshot carries a monotonically increasing sequence number and UTC capture time;
+- every fader carries its own monotonic action-observation revision, so a cache-only scan or a read of another fader cannot satisfy its confirmation gate;
 - writes use a same-directory temporary file and atomic replacement;
 - snapshot readers open with read/write/delete sharing so atomic replacement cannot be blocked by the overlay; publication uses unique same-directory temporary and backup paths plus bounded retries for antivirus or legacy-reader contention, preventing an IPC collision from terminating the worker;
 - command and event directories are bounded;
@@ -59,16 +60,17 @@ The visible fader name is presentation data. When the active BEACN profile is re
 
 ## Responsiveness and back-pressure
 
-- Named UI Automation row and output events are the primary action signal. A desktop click is matched only against the worker's already-confirmed cached row bounds and may request one targeted reread; it never performs a new point-based UI Automation query or decides final state.
+- Named UI Automation row and output events are the primary action signal. A desktop click is matched only against the worker's already-confirmed cached row bounds and schedules a bounded set of delayed targeted rereads; it never decides final state.
 - Native window movement translates cached geometry immediately, pauses provider reads while JUCE settles, and requests geometry verification rather than structural discovery.
 - Normal scans drain at most one named fader refresh. Explicit shortcut work has a separate coalescing urgent lane ahead of ordinary row notifications, while hardware requests retain their dedicated bounded queue. A lightweight 15 ms dispatcher pump consumes only mapped keyboard gestures; the heavier Discord/BEACN monitoring pass remains at 50 ms.
 - A detected state edge schedules a second targeted UI Automation read on the worker's 15 ms confirmation cadence, so confirmation does not wait for the ordinary snapshot heartbeat.
-- Hardware predictions have a 1.5-second lease and are allowed only while action authority, layout/page confidence, mapping generation, stable geometry, and the named row are current. Shortcut previews additionally require a healthy accessibility worker. A request-correlated result retracts only the prediction it owns.
+- Hardware and resolved desktop-action predictions have a four-second lease, long enough to cover BEACN's slowest observed confirmation pass. They are allowed only while action authority, layout/page confidence, stable geometry, and the named row are current. Hardware results remain correlated by mapping generation and request ownership, so a completed or mismatched result retracts only the prediction it owns. Shortcut previews additionally require a healthy accessibility worker.
 - USB, hardware refresh, global input, and Discord queues are bounded.
 - USB work has a per-frame processing budget.
 - The WPF dispatcher never performs a full BEACN tree walk.
 - Explicit shortcut, hardware, desktop, and periodic safety reads try the validated rendered-row hit test first and fall back to the same named accessibility subtree when hidden or occluded. Periodic safety reads inspect only the stalest fader after a ten-second freshness lease. Their cadence is cost-aware: it starts at 750 ms but backs off to ten times the measured UI Automation cost, capped at five seconds.
-- An unknown-page hardware press first compares the already tracked output toggles. One unique compatible edge selects exactly one authoritative row to inspect; zero or multiple edges retain the bounded serial fallback. Already-confident mappings skip this locator entirely. This identifies the page without deriving the displayed mute state from output toggles.
+- Desktop action hitboxes include BEACN's adjacent menu/status-button area, but overlapping candidates are ranked by direct containment and distance to the original named row. A neighboring fader or the other mute mode cannot win merely because its padded region was enumerated first.
+- An unknown-page hardware press first compares the already tracked output toggles. One unique compatible edge selects exactly one authoritative row to inspect; zero or multiple edges retain the bounded serial fallback. Output edges are retained in a bounded, timestamped per-source record so an event arriving just before the worker command can be correlated. A row/output UI Automation event carries BEACN's exact fader identity, is promoted ahead of fallback, and forces a second real read. If that urgent read consumed the row delta first, a successful reread may calibrate the page only when the output candidate is still the single compatible time-correlated edge. Already-confident mappings use staged preferred-row-only retries and never walk unrelated faders.
 - A requested shortcut target that is missing or temporarily unreadable survives one successful discovery generation, then either runs against the named fader or retires without an unbounded rediscovery loop. Retirement clears its deadline so a later independent gesture can make a fresh bounded attempt.
 - Hardware results and their confirmation rereads remain local to the active scan until its final native-geometry fence passes. Reads invalidated by movement are requeued instead of publishing page confidence from discarded state.
 

@@ -1,6 +1,9 @@
 param(
     [Parameter(Mandatory)][string]$ArchivePath,
-    [string]$ChecksumPath = ($ArchivePath + ".sha256")
+    [string]$ChecksumPath = ($ArchivePath + ".sha256"),
+    [string]$ExpectedVersion,
+    [switch]$RequireSigning,
+    [switch]$RequireDiscordPublicClient
 )
 
 $ErrorActionPreference = "Stop"
@@ -10,6 +13,7 @@ $resolvedArchivePath = (Resolve-Path -LiteralPath $ArchivePath).Path
 $resolvedChecksumPath = (Resolve-Path -LiteralPath $ChecksumPath).Path
 $checksumParts = ([IO.File]::ReadAllText($resolvedChecksumPath).Trim() -split '\s+')
 if ($checksumParts.Count -lt 2) { throw "The release checksum file is invalid." }
+if ([string]$checksumParts[1] -ne [IO.Path]::GetFileName($resolvedArchivePath)) { throw "The release checksum names a different archive." }
 $expectedHash = [string]$checksumParts[0]
 $actualHash = (Get-FileHash -LiteralPath $resolvedArchivePath -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($actualHash -ne $expectedHash.ToLowerInvariant()) { throw "The release archive checksum does not match." }
@@ -25,13 +29,34 @@ try {
     if (-not [IO.File]::Exists($releaseIndexPath)) { throw "The release file index is missing." }
     $releaseIndex = [IO.File]::ReadAllText($releaseIndexPath) | ConvertFrom-Json
     if ([int]$releaseIndex.schemaVersion -ne 1) { throw "The release file index schema is invalid." }
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedVersion) -and [string]$releaseIndex.version -cne $ExpectedVersion) {
+        throw "The release version does not match the requested version."
+    }
     if ([bool]$releaseIndex.timestamped -and -not [bool]$releaseIndex.signed) { throw "A timestamped release must also be signed." }
+    if ($RequireSigning -and (-not [bool]$releaseIndex.signed -or -not [bool]$releaseIndex.timestamped)) {
+        throw "A public release must be signed and timestamped."
+    }
+
+    $discordConfigurationPath = Join-Path $packageDirectory "MuteCue.DiscordPublicClient.json"
+    if (-not [IO.File]::Exists($discordConfigurationPath)) { throw "The Discord public-client configuration is missing." }
+    $discordConfiguration = [IO.File]::ReadAllText($discordConfigurationPath) | ConvertFrom-Json
+    $discordConfigurationValid = (
+        [int]$discordConfiguration.schemaVersion -eq 1 -and
+        [string]$discordConfiguration.applicationId -match '^\d{17,22}$' -and
+        [string]$discordConfiguration.redirectUri -ceq 'http://127.0.0.1:47891/mute-cue/'
+    )
+    if ([bool]$releaseIndex.discordPublicClientConfigured -ne $discordConfigurationValid) {
+        throw "The Discord configuration does not match the release index."
+    }
+    if ($RequireDiscordPublicClient -and -not $discordConfigurationValid) {
+        throw "A public release must contain the configured Mute Cue Discord client."
+    }
 
     $indexedPaths = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
     foreach ($entry in @($releaseIndex.files)) {
         $relativePath = [string]$entry.path
         if ([IO.Path]::IsPathRooted($relativePath) -or $relativePath.Contains("..")) { throw "The release index contains an unsafe path." }
-        [void]$indexedPaths.Add($relativePath.Replace('\', '/'))
+        if (-not $indexedPaths.Add($relativePath.Replace('\', '/'))) { throw "The release index contains duplicate paths." }
         $filePath = Join-Path $packageDirectory $relativePath.Replace('/', '\')
         if (-not [IO.File]::Exists($filePath)) { throw "Indexed release file '$relativePath' is missing." }
         if ([long](Get-Item -LiteralPath $filePath).Length -ne [long]$entry.bytes) { throw "Indexed release file '$relativePath' has the wrong size." }

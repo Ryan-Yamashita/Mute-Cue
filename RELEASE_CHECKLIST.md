@@ -2,8 +2,7 @@
 
 ## Automated gate
 
-- Run `Overlay\Build-MuteCueRelease.ps1 -RequireSigning -SigningCertificateThumbprint <thumbprint> -TimestampServer <CA HTTPS timestamp URL>`; do not assemble public release archives by hand.
-- Run `Overlay\Test-MuteCueSigningReadiness.ps1` first and require at least 30 days of remaining certificate validity.
+- Run `Overlay\Build-MuteCueRelease.ps1 -DiscordApplicationId <approved application ID> -RequireDiscordPublicClient`; do not assemble public release archives by hand.
 - Run `Overlay\Tests\Run-All.ps1` in Windows PowerShell 5.1.
 - Confirm the accessibility assembly reports the release version, contract 1, matching source hash, and a valid SHA-256 digest.
 - Confirm the isolated precompiled-runtime startup gate remains below its 750 ms P95 budget.
@@ -32,12 +31,12 @@
 
 ## Distribution gate
 
+- Configure the protected GitHub `production` environment documented in `DISCORD_RELEASE.md`, then publish by pushing the matching `v<manifest-version>` tag.
 - Build the versioned release directory and zip from `Overlay\MuteCue.ReleaseManifest.json` with the release script.
 - Verify `MuteCue.ReleaseFiles.json` and the external `.sha256` file against the exact downloadable archive.
-- Sign the installer/launcher artifacts with the release certificate.
-- Confirm `MuteCue.ReleaseFiles.json` reports `signed: true` and the intended certificate thumbprint.
-- Publish checksums and release notes with the verified BEACN compatibility range.
-- Keep the previous signed release available for rollback.
+- Confirm `MuteCue.ReleaseFiles.json` reports `signed: false` and no signer thumbprint.
+- Publish checksums and a prominent unsigned-download warning with the verified BEACN compatibility range.
+- Keep the previous release available for rollback.
 - Run the clean-machine smoke test from the exact downloadable artifact, not the source workspace.
 
 ## Discord public-client gate
