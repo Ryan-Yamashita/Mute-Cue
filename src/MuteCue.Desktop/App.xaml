@@ -2,14 +2,50 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
   <Application.Resources>
-    <SolidColorBrush x:Key="SurfaceBrush" Color="#171A21" />
-    <SolidColorBrush x:Key="PanelBrush" Color="#222733" />
-    <SolidColorBrush x:Key="AccentBrush" Color="#6BA8FF" />
-    <Style TargetType="TabItem">
-      <Setter Property="Padding" Value="12,7" />
-      <Setter Property="Margin" Value="0,0,6,0" />
-      <Setter Property="Foreground" Value="#CDD6E6" />
-      <Setter Property="Background" Value="#222733" />
+    <SolidColorBrush x:Key="SurfaceBrush" Color="#121317" />
+    <SolidColorBrush x:Key="ChromeBrush" Color="#1B1D22" />
+    <SolidColorBrush x:Key="ControlBrush" Color="#25272D" />
+    <SolidColorBrush x:Key="ForegroundBrush" Color="#F2F3F5" />
+    <SolidColorBrush x:Key="MutedBrush" Color="#9EA3AC" />
+    <SolidColorBrush x:Key="DividerBrush" Color="#2F3138" />
+    <SolidColorBrush x:Key="AccentBrush" Color="#FF4352" />
+    <Style x:Key="ActionButton" TargetType="Button">
+      <Setter Property="Height" Value="34" />
+      <Setter Property="Padding" Value="12,0" />
+      <Setter Property="Background" Value="{StaticResource ControlBrush}" />
+      <Setter Property="Foreground" Value="{StaticResource ForegroundBrush}" />
+      <Setter Property="BorderBrush" Value="{StaticResource DividerBrush}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="FontFamily" Value="Segoe UI Semibold" />
+    </Style>
+    <Style x:Key="AccentButton" TargetType="Button" BasedOn="{StaticResource ActionButton}">
+      <Setter Property="Background" Value="{StaticResource AccentBrush}" />
+      <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+    </Style>
+    <Style x:Key="MuteCueToggle" TargetType="CheckBox">
+      <Setter Property="Width" Value="42" />
+      <Setter Property="Height" Value="22" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="CheckBox">
+            <Grid>
+              <Border x:Name="Track" CornerRadius="11" Background="#4A4D56" BorderBrush="#5A5E69" BorderThickness="1" />
+              <Ellipse x:Name="Knob" Width="16" Height="16" Fill="#F2F3F5" HorizontalAlignment="Left" Margin="3,0,0,0" />
+            </Grid>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsChecked" Value="True">
+                <Setter TargetName="Track" Property="Background" Value="{StaticResource AccentBrush}" />
+                <Setter TargetName="Track" Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+                <Setter TargetName="Knob" Property="HorizontalAlignment" Value="Right" />
+                <Setter TargetName="Knob" Property="Margin" Value="0,0,3,0" />
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter Property="Opacity" Value="0.45" />
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
     </Style>
   </Application.Resources>
 </Application>

@@ -71,6 +71,8 @@ public sealed class NativeSettingsDocument
 
     public void SetDouble(string name, double value) => _root[name] = value;
 
+    public void SetString(string name, string value) => _root[name] = value;
+
     public void Save()
     {
         _root["SchemaVersion"] = CurrentSchemaVersion;
@@ -121,6 +123,14 @@ public static class FaderSourceParser
     public static IReadOnlyList<string> Parse(string value)
     {
         return value.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(32)
+            .ToArray();
+    }
+
+    public static IReadOnlyList<string> Merge(params string[] values)
+    {
+        return values.SelectMany(Parse)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .Take(32)
             .ToArray();

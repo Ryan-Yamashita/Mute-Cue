@@ -26,10 +26,12 @@ try
     Assert(faders.Count == 2 && faders[0] == "Mic" && faders[1] == "System", "Fader names must be trimmed and deduplicated.");
 
     settings.SetBoolean("StartInSystemTray", true);
+    settings.SetString("BeacnAllFaderNames", "Mic,System");
     settings.Save();
     var written = await File.ReadAllTextAsync(settingsPath);
     Assert(written.Contains("must-survive", StringComparison.Ordinal), "Unknown settings must survive native writes.");
     Assert(NativeSettingsDocument.Load(settingsPath).GetBoolean("StartInSystemTray", false), "Saved settings must round-trip.");
+    Assert(FaderSourceParser.Merge("Mic,System", "System,Chat").SequenceEqual(["Mic", "System", "Chat"]), "Merged fader sources must preserve display order without duplicates.");
     Console.WriteLine("Native settings compatibility tests: PASS");
 }
 finally

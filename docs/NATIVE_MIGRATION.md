@@ -10,7 +10,7 @@ The existing app has non-trivial safety behavior around BEACN accessibility, phy
 
 - `src/MuteCue.Desktop` is a real WPF `MuteCue.exe` target for .NET 10 LTS.
 - It is per-monitor DPI aware, single-instance, normal-user only, and has native system-tray/startup behavior.
-- It reads and writes the existing `%LOCALAPPDATA%\MuteCue\settings.json` atomically, preserves unknown settings, and keeps the existing backup file.
+- It reads and writes the existing `%LOCALAPPDATA%\MuteCue\Settings\settings.json` atomically, preserves unknown settings, and keeps the existing backup file.
 - It provides the same compact Discord, BEACN, and Settings shell and reads saved fader sources.
 - It intentionally does **not** enable BEACN or Discord monitoring yet. The stable app remains authoritative until those providers are ported and accepted.
 

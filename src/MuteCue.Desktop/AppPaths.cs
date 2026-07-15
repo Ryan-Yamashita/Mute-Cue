@@ -7,5 +7,5 @@ public static class AppPaths
 {
     public static string DataDirectory => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MuteCue");
 
-    public static string SettingsPath => Path.Combine(DataDirectory, "settings.json");
+    public static string SettingsPath => Path.Combine(DataDirectory, "Settings", "settings.json");
 }

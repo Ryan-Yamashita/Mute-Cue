@@ -15,5 +15,6 @@
     <Resource Include="..\..\Overlay\beacn-logo.png" Link="Assets\beacn-logo.png" />
     <Resource Include="..\..\Overlay\discord-logo.png" Link="Assets\discord-logo.png" />
     <Resource Include="..\..\Overlay\mute-cue-logo.png" Link="Assets\mute-cue-logo.png" />
+    <Resource Include="..\..\Overlay\mute-cue-logo-transparent.png" Link="Assets\mute-cue-logo-transparent.png" />
   </ItemGroup>
 </Project>
