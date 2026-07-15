@@ -40,6 +40,7 @@ foreach ($requiredWorkflowGate in @(
     '-RequireDiscordPublicClient',
     'gh release create',
     '--verify-tag',
+    '--notes-file',
     'Important: unsigned Windows download'
 )) {
     Assert-ReleasePipeline ($workflow.Contains($requiredWorkflowGate)) "The production workflow is missing '$requiredWorkflowGate'."

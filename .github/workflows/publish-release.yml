@@ -73,8 +73,10 @@ jobs:
 
           This community release is intentionally not Authenticode-signed. Windows may show an "unknown publisher" or SmartScreen warning. Download only from this official Mute Cue GitHub release, verify the included SHA-256 checksum, and inspect the source before running it if you are not comfortable accepting that risk.
           '@
+          $notesPath = Join-Path $env:RUNNER_TEMP 'mute-cue-release-notes.md'
+          [IO.File]::WriteAllText($notesPath, $notes, (New-Object Text.UTF8Encoding($false)))
           gh release create $env:GITHUB_REF_NAME $archive $checksum `
             --verify-tag `
             --title "Mute Cue $env:RELEASE_VERSION (Unsigned)" `
-            --notes $notes `
+            --notes-file $notesPath `
             --generate-notes
