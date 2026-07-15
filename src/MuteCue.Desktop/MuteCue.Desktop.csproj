@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <AssemblyName>MuteCue</AssemblyName>
+    <RootNamespace>MuteCue.Desktop</RootNamespace>
+    <Version>0.6.0-preview.1</Version>
+    <FileVersion>0.6.0.0</FileVersion>
+    <AssemblyVersion>0.6.0.0</AssemblyVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <Resource Include="..\..\Overlay\beacn-logo.png" Link="Assets\beacn-logo.png" />
+    <Resource Include="..\..\Overlay\discord-logo.png" Link="Assets\discord-logo.png" />
+    <Resource Include="..\..\Overlay\mute-cue-logo.png" Link="Assets\mute-cue-logo.png" />
+  </ItemGroup>
+</Project>

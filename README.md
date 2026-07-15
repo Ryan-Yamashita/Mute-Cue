@@ -59,3 +59,7 @@ Start with [Beta testing](docs/BETA_TESTING.md). Before opening an issue, use **
 ## Privacy and security
 
 Read [Privacy](PRIVACY.md) for the local-data model and [Security](SECURITY.md) for how to report a vulnerability privately.
+
+## Native EXE migration
+
+Mute Cue now contains the foundation for a self-contained native Windows executable. It is being migrated component by component so the final EXE can meet the existing BEACN safety and responsiveness guarantees without relying on PowerShell. The native preview is not a public download yet; see [Native EXE migration](docs/NATIVE_MIGRATION.md) for its current scope and release gates.

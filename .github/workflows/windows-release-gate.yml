@@ -16,6 +16,16 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v4
+      - name: Set up the native .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Build the native Mute Cue projects
+        shell: powershell
+        run: dotnet build .\src\MuteCue.Desktop.Tests\MuteCue.Desktop.Tests.csproj --configuration Release --nologo
+      - name: Test the native settings compatibility layer
+        shell: powershell
+        run: dotnet run --project .\src\MuteCue.Desktop.Tests\MuteCue.Desktop.Tests.csproj --configuration Release --no-build --nologo
       - name: Run the full Mute Cue test suite
         shell: powershell
         run: .\Overlay\Tests\Run-All.ps1

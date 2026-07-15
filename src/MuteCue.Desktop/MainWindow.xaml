@@ -1,0 +1,66 @@
+<Window x:Class="MuteCue.Desktop.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Mute Cue Native Preview" Height="610" Width="620" MinHeight="470" MinWidth="500"
+        Background="{StaticResource SurfaceBrush}" Foreground="#F2F5FB" WindowStartupLocation="CenterScreen">
+  <Grid Margin="18">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="*" />
+      <RowDefinition Height="Auto" />
+    </Grid.RowDefinitions>
+    <StackPanel Grid.Row="0" Margin="0,0,0,14">
+      <TextBlock Text="Mute Cue" FontSize="25" FontWeight="SemiBold" />
+      <TextBlock Text="Native host preview — settings compatibility and desktop shell" Foreground="#AAB6C8" Margin="0,3,0,0" />
+    </StackPanel>
+    <TabControl Grid.Row="1" Background="{StaticResource SurfaceBrush}" BorderBrush="#343C4C">
+      <TabItem>
+        <TabItem.Header>
+          <StackPanel Orientation="Horizontal"><Image Source="/Assets/discord-logo.png" Width="16" Height="16" Margin="0,0,6,0"/><TextBlock Text="Discord"/></StackPanel>
+        </TabItem.Header>
+        <Border Background="{StaticResource PanelBrush}" Padding="22" CornerRadius="5">
+          <StackPanel>
+            <TextBlock Text="Discord" FontSize="19" FontWeight="SemiBold" />
+            <TextBlock Text="Discord authorization will move here after the native local-RPC client is implemented." TextWrapping="Wrap" Foreground="#AAB6C8" Margin="0,9,0,0" />
+            <TextBlock Text="The existing stable app remains the source of truth during this preview phase." TextWrapping="Wrap" Foreground="#AAB6C8" Margin="0,8,0,0" />
+          </StackPanel>
+        </Border>
+      </TabItem>
+      <TabItem>
+        <TabItem.Header>
+          <StackPanel Orientation="Horizontal"><Image Source="/Assets/beacn-logo.png" Width="16" Height="16" Margin="0,0,6,0"/><TextBlock Text="BEACN"/></StackPanel>
+        </TabItem.Header>
+        <Border Background="{StaticResource PanelBrush}" Padding="22" CornerRadius="5">
+          <StackPanel>
+            <TextBlock Text="BEACN fader sources" FontSize="19" FontWeight="SemiBold" />
+            <TextBlock Text="Saved sources are read from your existing Mute Cue settings without discarding unknown settings." Foreground="#AAB6C8" TextWrapping="Wrap" Margin="0,9,0,10" />
+            <ListBox x:Name="FaderSources" Height="285" Background="#171A21" BorderBrush="#343C4C" Foreground="#F2F5FB" />
+            <TextBlock Text="Live accessibility monitoring is the next parity milestone and is intentionally not enabled in this preview." Foreground="#F3C776" TextWrapping="Wrap" Margin="0,10,0,0" />
+          </StackPanel>
+        </Border>
+      </TabItem>
+      <TabItem>
+        <TabItem.Header>
+          <StackPanel Orientation="Horizontal"><Image Source="/Assets/mute-cue-logo.png" Width="16" Height="16" Margin="0,0,6,0"/><TextBlock Text="Settings"/></StackPanel>
+        </TabItem.Header>
+        <Border Background="{StaticResource PanelBrush}" Padding="22" CornerRadius="5">
+          <Grid>
+            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+            <Grid.ColumnDefinitions><ColumnDefinition Width="170"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+            <TextBlock Text="Overlay size" VerticalAlignment="Center" />
+            <Slider x:Name="OverlaySize" Grid.Column="1" Minimum="220" Maximum="900" TickFrequency="10" ValueChanged="OverlaySize_OnValueChanged" />
+            <TextBlock Grid.Row="1" Text="Opacity" VerticalAlignment="Center" Margin="0,16,0,0" />
+            <Slider x:Name="OverlayOpacity" Grid.Row="1" Grid.Column="1" Minimum="0.25" Maximum="1" TickFrequency="0.05" Margin="0,16,0,0" ValueChanged="OverlayOpacity_OnValueChanged" />
+            <CheckBox x:Name="ClickThrough" Grid.Row="2" Grid.ColumnSpan="2" Content="Click through overlay" Margin="0,20,0,0" Checked="Setting_OnChanged" Unchecked="Setting_OnChanged" />
+            <CheckBox x:Name="RunOnStartup" Grid.Row="3" Grid.ColumnSpan="2" Content="Run on startup" Margin="0,10,0,0" Checked="RunOnStartup_OnChanged" Unchecked="RunOnStartup_OnChanged" />
+            <CheckBox x:Name="StartInTray" Grid.Row="4" Grid.ColumnSpan="2" Content="Start in system tray" Margin="20,8,0,0" Checked="Setting_OnChanged" Unchecked="Setting_OnChanged" />
+          </Grid>
+        </Border>
+      </TabItem>
+    </TabControl>
+    <DockPanel Grid.Row="2" Margin="0,14,0,0">
+      <TextBlock x:Name="StatusText" Foreground="#AAB6C8" TextWrapping="Wrap" DockPanel.Dock="Left" />
+      <Button Content="Save settings" Padding="13,6" Click="Save_OnClick" DockPanel.Dock="Right" />
+    </DockPanel>
+  </Grid>
+</Window>

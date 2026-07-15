@@ -31,3 +31,8 @@ Overlay/dist-signing-test/
 .vs/
 .vscode/
 Overlay/dist/
+
+# Native .NET build output
+src/**/bin/
+src/**/obj/
+artifacts/
