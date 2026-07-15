@@ -161,6 +161,20 @@ function Read-OverlaySettings {
     return Read-MuteCueSettings -Path $settingsPath -Defaults $defaultSettings
 }
 
+function Get-OverlaySettingsWriteStamp {
+    try {
+        $file = [System.IO.FileInfo]::new($settingsPath)
+        if (-not $file.Exists) { return "missing" }
+        return "{0}:{1}" -f $file.LastWriteTimeUtc.Ticks, $file.Length
+    } catch {
+        return "unavailable"
+    }
+}
+
+function Set-ObservedOverlaySettingsWriteStamp {
+    $script:lastObservedSettingsWriteStamp = Get-OverlaySettingsWriteStamp
+}
+
 function Save-OverlaySettings {
     param(
         [object]$Settings,
@@ -172,6 +186,7 @@ function Save-OverlaySettings {
         $script:settingsSavePending = $false
         try {
             [void](Save-MuteCueSettings -Path $settingsPath -Settings $Settings -Defaults $defaultSettings)
+            Set-ObservedOverlaySettingsWriteStamp
         } catch {
             Write-MuteCueDiagnosticThrottled `
                 -Key "settings-save" `
@@ -197,6 +212,7 @@ function Save-OverlaySettings {
                     -Path $settingsPath `
                     -Settings $script:settingsSaveObject `
                     -Defaults $defaultSettings)
+                Set-ObservedOverlaySettingsWriteStamp
             } catch {
                 Write-MuteCueDiagnosticThrottled `
                     -Key "settings-save" `
@@ -1082,6 +1098,7 @@ namespace BeacnMuteOverlay {
             public long MappingGeneration;
             public bool MappingConfident;
             public int Attempt;
+            public int FallbackIndex;
             public DateTime NotBeforeUtc;
         }
 
@@ -1298,6 +1315,7 @@ namespace BeacnMuteOverlay {
                 MappingGeneration = mappingGeneration,
                 MappingConfident = mappingConfident,
                 Attempt = 0,
+                FallbackIndex = -1,
                 // Let BEACN finish applying the USB action before reading its row.
                 NotBeforeUtc = DateTime.UtcNow.AddMilliseconds(30)
             });
@@ -2891,7 +2909,10 @@ namespace BeacnMuteOverlay {
 
         private static HardwareRefreshCompletion RefreshHardwareActionState(HardwareRefreshRequest request) {
             Stopwatch timer = Stopwatch.StartNew();
-            if (!request.MappingConfident && String.IsNullOrWhiteSpace(request.OutputCandidateName)) {
+            // A page hint can become stale without a page-button packet reaching us.
+            // The top output toggles provide a cheap, source-specific edge, so consult
+            // them even for a previously confident mapping before reading lower rows.
+            if (request.FallbackIndex < 0 && String.IsNullOrWhiteSpace(request.OutputCandidateName)) {
                 TrackedFader outputCandidate = FindUniqueOutputChange(request.Mask);
                 if (outputCandidate != null) request.OutputCandidateName = outputCandidate.Name;
             }
@@ -2919,7 +2940,7 @@ namespace BeacnMuteOverlay {
 
                 // A first read can race BEACN's JUCE redraw. Retry the same named
                 // software row once before treating the page/position hint as stale.
-                if (request.Attempt == 0 || (outputLocated && request.Attempt < 2)) {
+                if (request.FallbackIndex < 0 && (request.Attempt == 0 || (outputLocated && request.Attempt < 2))) {
                     request.Attempt++;
                     request.NotBeforeUtc = DateTime.UtcNow.AddMilliseconds(40);
                     EnqueueHardwareRefresh(request);
@@ -2935,61 +2956,72 @@ namespace BeacnMuteOverlay {
                 }
             }
 
-            int fallbackReads = 0;
-            foreach (TrackedFader fader in trackedFaders) {
-                if (fader == preferred) continue;
-                fallbackReads++;
+            // A stale page hint used to make one scan synchronously inspect every
+            // fader, blocking new presses for close to a second on some JUCE builds.
+            // Inspect at most one fallback row per scan and requeue at the tail. This
+            // keeps recovery bounded while allowing newer hardware/hotkey work ahead.
+            if (request.FallbackIndex < 0) request.FallbackIndex = 0;
+            List<TrackedFader> fallbackFaders = trackedFaders;
+            TrackedFader fallbackFader = null;
+            while (request.FallbackIndex < fallbackFaders.Count) {
+                TrackedFader candidate = fallbackFaders[request.FallbackIndex++];
+                if (candidate != preferred) {
+                    fallbackFader = candidate;
+                    break;
+                }
+            }
+            if (fallbackFader != null) {
                 bool changed;
-                if (TryRefreshFaderAction(fader, request.Mask, out changed) && changed) {
+                if (TryRefreshFaderAction(fallbackFader, request.Mask, out changed) && changed) {
                     timer.Stop();
                     lastActionRefresh = DateTime.UtcNow;
                     lastHardwareRefreshSummary = String.Format(
-                        "fallback {0} preferred={1} reads={2} elapsed={3:0}ms",
-                        fader.Name,
+                        "fallback {0} preferred={1} step={2}/{3} elapsed={4:0}ms",
+                        fallbackFader.Name,
                         request.PreferredName,
-                        fallbackReads,
+                        request.FallbackIndex,
+                        fallbackFaders.Count,
                         timer.Elapsed.TotalMilliseconds
                     );
-                    return new HardwareRefreshCompletion { Request = request, ChangedName = fader.Name };
+                    return new HardwareRefreshCompletion { Request = request, ChangedName = fallbackFader.Name };
                 }
             }
 
-            // If no state edge was visible yet, allow one final delayed pass. This
-            // protects slow BEACN redraws without keeping the scanner permanently hot.
-            if (request.Attempt < 2) {
-                request.Attempt = 2;
-                request.NotBeforeUtc = DateTime.UtcNow.AddMilliseconds(60);
+            while (request.FallbackIndex < fallbackFaders.Count && fallbackFaders[request.FallbackIndex] == preferred) {
+                request.FallbackIndex++;
+            }
+            if (request.FallbackIndex < fallbackFaders.Count) {
+                request.NotBeforeUtc = DateTime.UtcNow.AddMilliseconds(10);
                 EnqueueHardwareRefresh(request);
                 Interlocked.Exchange(ref actionRefreshRequested, 1);
-            } else {
-                // Complete the request even when no row changed. PowerShell uses
-                // the request ID to retract only this request's prediction; without
-                // completion a wrong page hint could remain visible until expiry.
-                HardwareRefreshCompletion completion = new HardwareRefreshCompletion {
-                    Request = request,
-                    ChangedName = String.Empty
-                };
                 timer.Stop();
                 lastActionRefresh = DateTime.UtcNow;
                 lastHardwareRefreshSummary = String.Format(
-                    "no change preferred={0} attempt={1} reads={2} elapsed={3:0}ms",
+                    "fallback waiting preferred={0} step={1}/{2} elapsed={3:0}ms",
                     request.PreferredName,
-                    request.Attempt + 1,
-                    fallbackReads + (preferred == null ? 0 : 1),
+                    request.FallbackIndex,
+                    fallbackFaders.Count,
                     timer.Elapsed.TotalMilliseconds
                 );
-                return completion;
+                return null;
             }
+
+            // Complete even when no row changed so PowerShell can immediately retract
+            // this request's incorrect prediction instead of waiting on its lease.
+            HardwareRefreshCompletion completion = new HardwareRefreshCompletion {
+                Request = request,
+                ChangedName = String.Empty
+            };
             timer.Stop();
             lastActionRefresh = DateTime.UtcNow;
             lastHardwareRefreshSummary = String.Format(
-                "no change preferred={0} attempt={1} reads={2} elapsed={3:0}ms",
+                "no change preferred={0} attempt={1} fallbackSteps={2} elapsed={3:0}ms",
                 request.PreferredName,
                 request.Attempt + 1,
-                fallbackReads + (preferred == null ? 0 : 1),
+                request.FallbackIndex,
                 timer.Elapsed.TotalMilliseconds
             );
-            return null;
+            return completion;
         }
 
         private static bool TryReadActionRow(
@@ -4135,6 +4167,9 @@ try {
 Write-BeacnStateLog -Message ("STARTUP Discord RPC available={0}" -f [int]$discordRpcAvailable)
 
 $settings = Read-OverlaySettings
+$script:lastObservedSettingsWriteStamp = Get-OverlaySettingsWriteStamp
+$script:lastExternalSettingsCheckUtc = [DateTime]::MinValue
+$script:applyingBeacnFaderRows = $false
 $script:settingsSaveTimer = $null
 $script:settingsSavePending = $false
 $script:settingsSaveObject = $settings
@@ -4380,6 +4415,46 @@ function Get-WatchedFaderNames {
             Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
             Select-Object -Unique
     )
+}
+
+function Update-ExternalFaderSelectionSettings {
+    $now = [DateTime]::UtcNow
+    if (($now - $script:lastExternalSettingsCheckUtc).TotalMilliseconds -lt 250) { return }
+    $script:lastExternalSettingsCheckUtc = $now
+
+    $writeStamp = Get-OverlaySettingsWriteStamp
+    if ($writeStamp -eq $script:lastObservedSettingsWriteStamp) { return }
+    $script:lastObservedSettingsWriteStamp = $writeStamp
+
+    try {
+        $externalSettings = Read-OverlaySettings
+        $currentSignature = Get-MuteCueFaderSelectionSignature -Settings $settings
+        $externalSignature = Get-MuteCueFaderSelectionSignature -Settings $externalSettings
+        if ($currentSignature -eq $externalSignature) { return }
+
+        [void](Copy-MuteCueFaderSelectionSettings -Source $externalSettings -Destination $settings)
+        $script:mixCreateFaderConfiguration = $null
+        if ($null -ne $script:beacnOptimisticActionStates) {
+            $script:beacnOptimisticActionStates.Clear()
+        }
+        if ($null -ne (Get-Command Update-BeacnFaderRows -ErrorAction SilentlyContinue)) {
+            Update-BeacnFaderRows
+        }
+        Write-MuteCueDiagnosticThrottled `
+            -Key "external-fader-settings" `
+            -Level Info `
+            -Component "Configuration" `
+            -Message "Applied fader selections saved by the native settings window." `
+            -MinimumIntervalSeconds 1
+    } catch {
+        Write-MuteCueDiagnosticThrottled `
+            -Key "external-fader-settings" `
+            -Level Warning `
+            -Component "Configuration" `
+            -Message "A fader selection update could not be applied yet; Mute Cue will retry." `
+            -Exception $_.Exception `
+            -MinimumIntervalSeconds 30
+    }
 }
 
 function Test-BeacnAppStateFresh {
@@ -6069,6 +6144,9 @@ function Start-MixCreateMonitor {
 }
 
 function Update-MixCreateAudienceState {
+    param([switch]$InputOnly)
+
+    if (-not $InputOnly) {
     # Complete any pending desktop scan before deciding whether the USB fallback
     # is needed. This makes BEACN's named action rows the primary data source.
     Update-BeacnAppFaderState
@@ -6111,19 +6189,20 @@ function Update-MixCreateAudienceState {
         )
         Update-BeacnFaderRows
     }
+    }
     if ($null -eq $script:mixCreateMonitor) {
-        Update-BeacnAppFaderState
+        if (-not $InputOnly) { Update-BeacnAppFaderState }
         return
     }
 
-    try {
+    if (-not $InputOnly) { try {
         $droppedPacketCount = [long]$script:mixCreateMonitor.DroppedPacketCount
         if ($droppedPacketCount -gt $script:lastMixCreateDroppedPacketCount) {
             $newDrops = $droppedPacketCount - $script:lastMixCreateDroppedPacketCount
             $script:lastMixCreateDroppedPacketCount = $droppedPacketCount
             Write-MuteCueDiagnosticThrottled -Key "usb-queue-drops" -Level Warning -Component "Performance" -Message ("USB input fell behind and discarded {0} old packets." -f $newDrops) -MinimumIntervalSeconds 30
         }
-    } catch {}
+    } catch {} }
     $packet = $null
     $processedPacketCount = 0
     while ($processedPacketCount -lt 512 -and $script:mixCreateMonitor.TryDequeue([ref]$packet)) {
@@ -6261,6 +6340,8 @@ function Update-MixCreateAudienceState {
         $script:mixCreateAudienceMute[$faderIndex] = $isAudienceMuted
     }
 
+    if ($InputOnly) { return }
+
     if (
         ([DateTime]::UtcNow - $script:mixCreateMonitorStarted).TotalSeconds -ge 5 -and
         $script:lastMixCreateStatusPacket -lt $script:mixCreateMonitorStarted
@@ -6275,6 +6356,10 @@ function Update-MixCreateAudienceState {
         $script:lastMixCreateDiscoveryAttempt = [DateTime]::MinValue
     }
     Update-BeacnAppFaderState
+}
+
+function Invoke-MixCreateUsbPacketQueue {
+    Update-MixCreateAudienceState -InputOnly
 }
 
 function Set-BeacnMuteAllState {
@@ -8227,6 +8312,9 @@ function Add-BeacnDynamicFaderRow {
 
 function Update-BeacnFaderRows {
     if ($null -eq $script:beacnFaderRows) { return }
+    $previousApplyingState = [bool]$script:applyingBeacnFaderRows
+    $script:applyingBeacnFaderRows = $true
+    try {
     $selectedAll = @(Get-ConfiguredMixCreateFaderNames -NamesProperty "BeacnAllFaderNames" -LegacyIdsProperty "BeacnAllFaderIds")
     $selectedAudience = @(Get-ConfiguredMixCreateFaderNames -NamesProperty "BeacnAudienceFaderNames" -LegacyIdsProperty "BeacnAudienceFaderIds")
 
@@ -8264,6 +8352,9 @@ function Update-BeacnFaderRows {
         $row.AudienceToggle.IsEnabled = [bool]$fader.CanMonitorAudience
         $row.AllToggle.IsChecked = ($selectedAll -contains $name)
         $row.AudienceToggle.IsChecked = ($selectedAudience -contains $name)
+    }
+    } finally {
+        $script:applyingBeacnFaderRows = $previousApplyingState
     }
 }
 
@@ -8468,6 +8559,7 @@ function Update-BeacnSettingsVisibility {
 }
 
 function Apply-SettingsToOverlay {
+    if ([bool]$script:applyingBeacnFaderRows) { return }
     $settings.BeacnDirectDetect = [bool]$beacnDirectDetect.IsChecked
     $settings.BeacnAudienceFaderNames = @(Get-SelectedBeacnFaderNames -Mode "Audience") -join ','
     $settings.BeacnAllFaderNames = @(Get-SelectedBeacnFaderNames -Mode "All") -join ','
@@ -8673,6 +8765,7 @@ $timer.Interval = [TimeSpan]::FromMilliseconds(50)
 $timer.Add_Tick({
     $tickStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     try {
+    Update-ExternalFaderSelectionSettings
     $muteSources = New-Object 'System.Collections.Generic.List[string]'
     if ([bool]$settings.ForceShow) {
         [void]$muteSources.Add("Testing overlay")
@@ -8765,18 +8858,21 @@ $timer.Add_Tick({
     }
 })
 
-# The full monitoring pass stays at 20 Hz, while the tiny pass-through keyboard
-# queue gets a dedicated 15 ms pump so shortcut feedback does not wait an entire
-# UI monitoring frame. The dispatcher keeps both consumers serialized.
+# The full monitoring pass stays at 20 Hz, while the tiny keyboard and USB input
+# queues get a dedicated 15 ms pump (about 67 Hz). This improves control latency
+# without tripling accessibility, Discord, settings, and presentation work.
 $hotkeyInputTimer = New-Object System.Windows.Threading.DispatcherTimer
 $hotkeyInputTimer.Interval = [TimeSpan]::FromMilliseconds(15)
 $hotkeyInputTimer.Add_Tick({
-    try { Invoke-BeacnHotkeyGestureQueue } catch {
+    try {
+        Invoke-BeacnHotkeyGestureQueue
+        Invoke-MixCreateUsbPacketQueue
+    } catch {
         Write-MuteCueDiagnosticThrottled `
-            -Key 'beacn-hotkey-input-pump' `
+            -Key 'beacn-fast-input-pump' `
             -Level Warning `
             -Component 'BEACN' `
-            -Message 'A shortcut input update failed; the next update will retry.' `
+            -Message 'A fast input update failed; the next update will retry.' `
             -Exception $_.Exception `
             -MinimumIntervalSeconds 30
     }

@@ -136,3 +136,36 @@ public static class FaderSourceParser
             .ToArray();
     }
 }
+
+public static class FaderSelectionSettings
+{
+    public static void Apply(
+        NativeSettingsDocument settings,
+        IEnumerable<string> allSources,
+        IEnumerable<string> audienceSources)
+    {
+        var all = Normalize(allSources);
+        var audience = Normalize(audienceSources);
+        var selected = all.Concat(audience)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        settings.SetString("BeacnAllFaderNames", string.Join(',', all));
+        settings.SetString("BeacnAudienceFaderNames", string.Join(',', audience));
+        settings.SetString("BeacnFaderNames", string.Join(',', selected));
+
+        // The native settings host does not own BEACN's live stable-key catalog yet.
+        // Clear older key selections and make the explicit names authoritative so an
+        // unchecked row cannot remain enabled through a stale hidden key.
+        settings.SetString("BeacnAllFaderKeys", string.Empty);
+        settings.SetString("BeacnAudienceFaderKeys", string.Empty);
+        settings.SetInteger("BeacnFaderSelectionFormat", 2);
+    }
+
+    private static string[] Normalize(IEnumerable<string> values) => values
+        .Select(value => value?.Trim() ?? string.Empty)
+        .Where(value => value.Length > 0)
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .Take(32)
+        .ToArray();
+}

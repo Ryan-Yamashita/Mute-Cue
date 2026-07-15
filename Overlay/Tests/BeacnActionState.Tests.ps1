@@ -122,8 +122,14 @@ $stillLeased = Resolve-BeacnDisplayedActionState `
     -AuthoritativeAllActive $false `
     -AuthoritativeAudienceActive $false `
     -OptimisticState $optimistic `
-    -Now $now.AddSeconds(1)
+    -Now $now.AddMilliseconds(700)
 Assert-Equal $stillLeased.UseOptimistic $true "A recent high-confidence prediction must remain responsive"
+$shortLeaseExpired = Resolve-BeacnDisplayedActionState `
+    -AuthoritativeAllActive $false `
+    -AuthoritativeAudienceActive $false `
+    -OptimisticState $optimistic `
+    -Now $now.AddSeconds(1)
+Assert-Equal $shortLeaseExpired.UseOptimistic $false "An incorrect prediction must return to authoritative state promptly"
 
 $performanceTracker = New-BeacnActionTracker
 $stopwatch = [Diagnostics.Stopwatch]::StartNew()

@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Threading;
 using Forms = System.Windows.Forms;
 using MuteCue.Desktop.Services;
 
@@ -13,6 +14,7 @@ public partial class MainWindow : Window
     private readonly NativeSettingsDocument _settings;
     private readonly Forms.NotifyIcon _trayIcon;
     private readonly List<FaderSelectionRow> _faderRows = [];
+    private readonly DispatcherTimer _faderSaveTimer;
     private bool _isLoading = true;
     private bool _allowClose;
 
@@ -21,6 +23,12 @@ public partial class MainWindow : Window
         InitializeComponent();
         _settings = settings;
         _trayIcon = CreateTrayIcon();
+        _faderSaveTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(120) };
+        _faderSaveTimer.Tick += (_, _) =>
+        {
+            _faderSaveTimer.Stop();
+            SaveFaderSelections();
+        };
         LoadSettings();
         _isLoading = false;
         StatusText.Text = "Native preview ready. The stable app remains active until feature parity is verified.";
@@ -97,7 +105,12 @@ public partial class MainWindow : Window
         SaveSettings();
     }
 
-    private void Save_OnClick(object sender, RoutedEventArgs e) => SaveSettings();
+    private void Save_OnClick(object sender, RoutedEventArgs e)
+    {
+        _faderSaveTimer.Stop();
+        SaveFaderSelections();
+        SaveSettings();
+    }
 
     private void Close_OnClick(object sender, RoutedEventArgs e) => HideToTray();
 
@@ -145,6 +158,9 @@ public partial class MainWindow : Window
     {
         var allSources = FaderSourceParser.Parse(_settings.GetString("BeacnAllFaderNames", ""));
         var audienceSources = FaderSourceParser.Parse(_settings.GetString("BeacnAudienceFaderNames", ""));
+        var staleAllKeys = FaderSourceParser.Parse(_settings.GetString("BeacnAllFaderKeys", ""));
+        var staleAudienceKeys = FaderSourceParser.Parse(_settings.GetString("BeacnAudienceFaderKeys", ""));
+        var selectionFormat = _settings.GetInteger("BeacnFaderSelectionFormat", 1, 1, 3);
         var sources = FaderSourceParser.Merge(
             _settings.GetString("BeacnFaderNames", ""),
             _settings.GetString("BeacnAllFaderNames", ""),
@@ -158,6 +174,15 @@ public partial class MainWindow : Window
         foreach (var source in sources)
         {
             AddFaderSelectionRow(source, allSources.Contains(source, StringComparer.OrdinalIgnoreCase), audienceSources.Contains(source, StringComparer.OrdinalIgnoreCase));
+        }
+
+        if (selectionFormat >= 3 && allSources.Count == 0 && audienceSources.Count == 0 &&
+            (staleAllKeys.Count > 0 || staleAudienceKeys.Count > 0))
+        {
+            // Repair the mismatch produced by the first native preview: it cleared
+            // visible names but accidentally retained hidden stable-key selections.
+            FaderSelectionSettings.Apply(_settings, [], []);
+            _settings.Save();
         }
     }
 
@@ -202,18 +227,15 @@ public partial class MainWindow : Window
             return;
         }
 
-        SaveFaderSelections();
+        _faderSaveTimer.Stop();
+        _faderSaveTimer.Start();
     }
 
     private void SaveFaderSelections()
     {
         var allSources = _faderRows.Where(row => row.AllToggle.IsChecked == true).Select(row => row.Source).ToArray();
         var audienceSources = _faderRows.Where(row => row.AudienceToggle.IsChecked == true).Select(row => row.Source).ToArray();
-        var selectedSources = _faderRows.Where(row => row.AllToggle.IsChecked == true || row.AudienceToggle.IsChecked == true).Select(row => row.Source).ToArray();
-        _settings.SetString("BeacnAllFaderNames", string.Join(',', allSources));
-        _settings.SetString("BeacnAudienceFaderNames", string.Join(',', audienceSources));
-        _settings.SetString("BeacnFaderNames", string.Join(',', selectedSources));
-        _settings.SetInteger("BeacnFaderSelectionFormat", 3);
+        FaderSelectionSettings.Apply(_settings, allSources, audienceSources);
         _settings.Save();
         StatusText.Text = "BEACN fader selections saved.";
     }
@@ -227,6 +249,11 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (_faderSaveTimer.IsEnabled)
+        {
+            _faderSaveTimer.Stop();
+            SaveFaderSelections();
+        }
         _trayIcon.Visible = false;
         _trayIcon.Dispose();
         base.OnClosing(e);

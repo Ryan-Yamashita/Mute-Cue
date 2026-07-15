@@ -32,6 +32,15 @@ try
     Assert(written.Contains("must-survive", StringComparison.Ordinal), "Unknown settings must survive native writes.");
     Assert(NativeSettingsDocument.Load(settingsPath).GetBoolean("StartInSystemTray", false), "Saved settings must round-trip.");
     Assert(FaderSourceParser.Merge("Mic,System", "System,Chat").SequenceEqual(["Mic", "System", "Chat"]), "Merged fader sources must preserve display order without duplicates.");
+
+    settings.SetString("BeacnAllFaderKeys", "profile:0,profile:1");
+    settings.SetString("BeacnAudienceFaderKeys", "profile:0,profile:1");
+    FaderSelectionSettings.Apply(settings, [], []);
+    Assert(settings.GetString("BeacnAllFaderNames", "missing") == string.Empty, "Clearing All selections must persist an explicit empty list.");
+    Assert(settings.GetString("BeacnAudienceFaderNames", "missing") == string.Empty, "Clearing Audience selections must persist an explicit empty list.");
+    Assert(settings.GetString("BeacnAllFaderKeys", "missing") == string.Empty, "Native name selections must clear stale All stable keys.");
+    Assert(settings.GetString("BeacnAudienceFaderKeys", "missing") == string.Empty, "Native name selections must clear stale Audience stable keys.");
+    Assert(settings.GetInteger("BeacnFaderSelectionFormat", 0, 0, 3) == 2, "Native name selections must make names authoritative.");
     Console.WriteLine("Native settings compatibility tests: PASS");
 }
 finally

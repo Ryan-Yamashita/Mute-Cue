@@ -82,7 +82,7 @@ function New-BeacnOptimisticActionState {
         [Parameter(Mandatory)][DateTime]$Now,
         [long]$RequestId = 0,
         [int]$Position = -1,
-        [double]$MaximumAgeSeconds = 1.5
+        [double]$MaximumAgeSeconds = 0.85
     )
 
     $allActive = $AuthoritativeAllActive
@@ -125,7 +125,7 @@ function Resolve-BeacnDisplayedActionState {
         [Parameter(Mandatory)][bool]$AuthoritativeAudienceActive,
         [AllowNull()][object]$OptimisticState,
         [Parameter(Mandatory)][DateTime]$Now,
-        [double]$MaximumAgeSeconds = 1.5
+        [double]$MaximumAgeSeconds = 0.85
     )
 
     $useOptimistic = (

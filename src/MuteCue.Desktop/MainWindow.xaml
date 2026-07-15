@@ -56,7 +56,7 @@
           <TextBlock Text="Fader Sources" FontSize="18" FontFamily="Segoe UI Semibold" Margin="0,2,0,6" />
           <TextBlock Text="Choose which mute states should show the overlay for each mixer source." Foreground="{StaticResource MutedBrush}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8" />
           <Grid Margin="0,0,0,2"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="92"/><ColumnDefinition Width="112"/></Grid.ColumnDefinitions><TextBlock Text="Source" Foreground="{StaticResource MutedBrush}" FontSize="12"/><TextBlock Grid.Column="1" Text="Mute to All" Foreground="{StaticResource MutedBrush}" FontSize="12" HorizontalAlignment="Center"/><TextBlock Grid.Column="2" Text="Mute to Audience" Foreground="{StaticResource MutedBrush}" FontSize="12" HorizontalAlignment="Center"/></Grid>
-          <Border Height="300" Background="#1B1D22" BorderBrush="{StaticResource DividerBrush}" BorderThickness="1" Padding="8"><ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"><StackPanel x:Name="FaderSources"/></ScrollViewer></Border>
+          <Border Background="#1B1D22" BorderBrush="{StaticResource DividerBrush}" BorderThickness="1" Padding="8"><StackPanel x:Name="FaderSources"/></Border>
           <TextBlock Text="Selections are saved to the same compatible Mute Cue settings file. Live discovery, hardware wakeups, and BEACN Knob Mute hotkeys move over after the native worker passes the existing acceptance matrix." Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="0,12,0,0" />
         </StackPanel>
       </ScrollViewer>

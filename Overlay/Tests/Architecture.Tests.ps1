@@ -151,8 +151,18 @@ foreach ($calmStatusGuarantee in @("Update-MuteCueBeacnProviderTrouble", "Update
         throw "The BEACN connection card is missing calm recovery behavior '$calmStatusGuarantee'."
     }
 }
-if (-not $actionStateSource.Contains('[double]$MaximumAgeSeconds = 1.5')) {
+if (-not $actionStateSource.Contains('[double]$MaximumAgeSeconds = 0.85')) {
     throw "Hardware predictions must have a bounded short lease."
+}
+foreach ($fastInputGuarantee in @('FromMilliseconds(15)', 'Invoke-BeacnHotkeyGestureQueue', 'Invoke-MixCreateUsbPacketQueue')) {
+    if (-not $source.Contains($fastInputGuarantee)) {
+        throw "The fast input path is missing '$fastInputGuarantee'."
+    }
+}
+foreach ($workerCadenceGuarantee in @('$idleScanCadenceMilliseconds = 2000', '$scanRequested', 'WaitForChanged($watchTypes, 60)', '$shouldPublish')) {
+    if (-not $hostSource.Contains($workerCadenceGuarantee)) {
+        throw "The accessibility worker cadence is missing '$workerCadenceGuarantee'."
+    }
 }
 foreach ($installerGuarantee in @(".staging-", "Directory]::Move", "File]::Replace", "current.txt.previous")) {
     if (-not $installerSource.Contains($installerGuarantee) -and -not $installerSource.Contains($installerGuarantee.Replace("current.txt.previous", "current.txt"))) {
