@@ -58,33 +58,20 @@ try {
     dotnet publish $projectPath --configuration Release --runtime win-x64 --self-contained true --output $publishDirectory --nologo
     if ($LASTEXITCODE -ne 0) { throw "The native Mute Cue executable did not publish successfully." }
 
-    $runtimeDirectory = Join-Path $publishDirectory "Runtime"
-    $accessibilityDirectory = Join-Path $runtimeDirectory "bin"
-    if (-not [IO.Directory]::Exists($accessibilityDirectory)) { [void][IO.Directory]::CreateDirectory($accessibilityDirectory) }
-    foreach ($relativePath in @("MuteCue.Accessibility.dll", "MuteCue.Accessibility.manifest.json")) {
-        $sourcePath = Join-Path $overlayDirectory (Join-Path "bin" $relativePath)
-        $destinationPath = Join-Path $accessibilityDirectory $relativePath
-        if (-not [IO.File]::Exists($sourcePath)) { throw "Required accessibility runtime '$relativePath' is missing." }
-        [IO.File]::Copy($sourcePath, $destinationPath, $true)
-    }
-
     $discordConfiguration = [ordered]@{
         schemaVersion = 1
         applicationId = $DiscordApplicationId
         redirectUri = "http://127.0.0.1:47891/mute-cue/"
     } | ConvertTo-Json -Depth 3
     [IO.File]::WriteAllText(
-        (Join-Path $runtimeDirectory "MuteCue.DiscordPublicClient.json"),
+        (Join-Path $publishDirectory "MuteCue.DiscordPublicClient.json"),
         $discordConfiguration,
         (New-Object Text.UTF8Encoding($false))
     )
 
     foreach ($relativePath in @(
         "MuteCue.exe",
-        "Runtime\BeacnMuteOverlay.ps1",
-        "Runtime\MuteCue.DiscordPublicClient.json",
-        "Runtime\bin\MuteCue.Accessibility.dll",
-        "Runtime\bin\MuteCue.Accessibility.manifest.json"
+        "MuteCue.DiscordPublicClient.json"
     )) {
         if (-not [IO.File]::Exists((Join-Path $publishDirectory $relativePath))) {
             throw "The published installer payload is missing '$relativePath'."

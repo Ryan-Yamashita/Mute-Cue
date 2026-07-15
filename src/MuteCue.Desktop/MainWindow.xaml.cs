@@ -6,22 +6,29 @@ using System.Windows.Media;
 using System.Windows.Threading;
 using Forms = System.Windows.Forms;
 using MuteCue.Desktop.Services;
+using MuteCue.Desktop.NativeRuntime;
 
 namespace MuteCue.Desktop;
 
 public partial class MainWindow : Window
 {
     private readonly NativeSettingsDocument _settings;
+    private readonly NativeMuteCueRuntime _runtime;
     private readonly Forms.NotifyIcon _trayIcon;
     private readonly List<FaderSelectionRow> _faderRows = [];
     private readonly DispatcherTimer _faderSaveTimer;
     private bool _isLoading = true;
     private bool _allowClose;
 
-    public MainWindow(NativeSettingsDocument settings, bool startInTray)
+    public MainWindow(NativeSettingsDocument settings, NativeMuteCueRuntime runtime, bool startInTray)
     {
         InitializeComponent();
+        Title = $"{AppChannel.ProductName} Settings";
+        DevBadge.Visibility = AppChannel.IsDevelopment ? Visibility.Visible : Visibility.Collapsed;
         _settings = settings;
+        _runtime = runtime;
+        _runtime.DiscordStatusChanged += Runtime_OnDiscordStatusChanged;
+        _runtime.BeacnStatusChanged += Runtime_OnBeacnStatusChanged;
         _trayIcon = CreateTrayIcon();
         _faderSaveTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(120) };
         _faderSaveTimer.Tick += (_, _) =>
@@ -31,7 +38,7 @@ public partial class MainWindow : Window
         };
         LoadSettings();
         _isLoading = false;
-        StatusText.Text = "Native preview ready. The stable app remains active until feature parity is verified.";
+        StatusText.Text = $"{AppChannel.ProductName} is monitoring BEACN and Discord locally.";
         SelectTab("Discord");
 
         if (startInTray)
@@ -45,12 +52,12 @@ public partial class MainWindow : Window
         var icon = new Forms.NotifyIcon
         {
             Icon = System.Drawing.SystemIcons.Application,
-            Text = "Mute Cue Native Preview",
+            Text = AppChannel.ProductName,
             Visible = true,
         };
         icon.DoubleClick += (_, _) => RestoreFromTray();
         icon.ContextMenuStrip = new Forms.ContextMenuStrip();
-        icon.ContextMenuStrip.Items.Add("Show Mute Cue", null, (_, _) => RestoreFromTray());
+        icon.ContextMenuStrip.Items.Add($"Show {AppChannel.ProductName}", null, (_, _) => RestoreFromTray());
         icon.ContextMenuStrip.Items.Add("Exit", null, (_, _) =>
         {
             _allowClose = true;
@@ -67,8 +74,14 @@ public partial class MainWindow : Window
         OverlayOpacityValue.Text = $"{OverlayOpacity.Value:P0}";
         ClickThrough.IsChecked = _settings.GetBoolean("ClickThrough", false);
         RunOnStartup.IsChecked = StartupRegistrationService.IsRegistered();
-        StartInTray.IsChecked = _settings.GetBoolean("StartInSystemTray", false);
-        StartInTray.IsEnabled = RunOnStartup.IsChecked == true;
+        RunOnStartup.IsEnabled = StartupRegistrationService.IsSupported;
+        RunOnStartupLabel.Text = StartupRegistrationService.IsSupported ? "Run on startup" : "Run on startup (Stable only)";
+        StartInTray.IsChecked = StartupRegistrationService.IsSupported && _settings.GetBoolean("StartInSystemTray", false);
+        StartInTray.IsEnabled = StartupRegistrationService.IsSupported && RunOnStartup.IsChecked == true;
+        DiscordMicDetect.IsChecked = _settings.GetBoolean("DiscordMicDetect", true);
+        DiscordDeafenDetect.IsChecked = _settings.GetBoolean("DiscordDeafenDetect", true);
+        DiscordStatus.Text = _runtime.DiscordConnectionStatus;
+        BeacnStatus.Text = _runtime.BeacnConnectionStatus;
 
         LoadFaderSelections();
     }
@@ -114,6 +127,16 @@ public partial class MainWindow : Window
 
     private void Close_OnClick(object sender, RoutedEventArgs e) => HideToTray();
 
+    private void ConnectDiscord_OnClick(object sender, RoutedEventArgs e) => _runtime.ConnectDiscord();
+
+    private void DisconnectDiscord_OnClick(object sender, RoutedEventArgs e) => _runtime.DisconnectDiscord();
+
+    private void ForgetDiscord_OnClick(object sender, RoutedEventArgs e) => _runtime.ForgetDiscordAuthorization();
+
+    private void PreviewOverlay_OnClick(object sender, RoutedEventArgs e) => _runtime.PreviewOverlay(centerOnPrimaryScreen: false);
+
+    private void CenterOverlay_OnClick(object sender, RoutedEventArgs e) => _runtime.PreviewOverlay(centerOnPrimaryScreen: true);
+
     private void DiscordTab_OnClick(object sender, RoutedEventArgs e) => SelectTab("Discord");
 
     private void BeacnTab_OnClick(object sender, RoutedEventArgs e) => SelectTab("BEACN");
@@ -149,9 +172,12 @@ public partial class MainWindow : Window
         _settings.SetInteger("Size", (int)Math.Round(OverlaySize.Value));
         _settings.SetDouble("Opacity", OverlayOpacity.Value);
         _settings.SetBoolean("ClickThrough", ClickThrough.IsChecked == true);
+        _settings.SetBoolean("DiscordMicDetect", DiscordMicDetect.IsChecked == true);
+        _settings.SetBoolean("DiscordDeafenDetect", DiscordDeafenDetect.IsChecked == true);
         _settings.SetBoolean("StartInSystemTray", StartInTray.IsChecked == true && RunOnStartup.IsChecked == true);
         _settings.Save();
-        StatusText.Text = "Settings saved using the shared Mute Cue settings file.";
+        _runtime.ApplySettings();
+        StatusText.Text = "Settings saved.";
     }
 
     private void LoadFaderSelections()
@@ -251,13 +277,16 @@ public partial class MainWindow : Window
         }
         _trayIcon.Visible = false;
         _trayIcon.Dispose();
+        _runtime.DiscordStatusChanged -= Runtime_OnDiscordStatusChanged;
+        _runtime.BeacnStatusChanged -= Runtime_OnBeacnStatusChanged;
+        _runtime.SaveOverlayPosition();
         base.OnClosing(e);
     }
 
     private void HideToTray()
     {
         Hide();
-        _trayIcon.ShowBalloonTip(1000, "Mute Cue", "Mute Cue is running in the system tray.", Forms.ToolTipIcon.Info);
+        _trayIcon.ShowBalloonTip(1000, AppChannel.ProductName, $"{AppChannel.ProductName} is running in the system tray.", Forms.ToolTipIcon.Info);
     }
 
     private void RestoreFromTray()
@@ -265,6 +294,16 @@ public partial class MainWindow : Window
         Show();
         WindowState = WindowState.Normal;
         Activate();
+    }
+
+    private void Runtime_OnDiscordStatusChanged(string status)
+    {
+        DiscordStatus.Text = status;
+    }
+
+    private void Runtime_OnBeacnStatusChanged(string status)
+    {
+        BeacnStatus.Text = status;
     }
 
     private sealed record FaderSelectionRow(string Source, System.Windows.Controls.CheckBox AllToggle, System.Windows.Controls.CheckBox AudienceToggle);

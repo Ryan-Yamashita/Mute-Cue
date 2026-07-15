@@ -25,10 +25,7 @@ try {
 
     foreach ($relativePath in @(
         "MuteCue.exe",
-        "Runtime\BeacnMuteOverlay.ps1",
-        "Runtime\MuteCue.DiscordPublicClient.json",
-        "Runtime\bin\MuteCue.Accessibility.dll",
-        "Runtime\bin\MuteCue.Accessibility.manifest.json"
+        "MuteCue.DiscordPublicClient.json"
     )) {
         if (-not [IO.File]::Exists((Join-Path $installDirectory $relativePath))) {
             throw "The installed Mute Cue application is missing '$relativePath'."
@@ -49,25 +46,23 @@ try {
     }
 
     $hostProcess = Start-Process -FilePath $installedExecutable -PassThru
-    $runtimeScript = Join-Path $installDirectory "Runtime\BeacnMuteOverlay.ps1"
     $deadline = [DateTime]::UtcNow.AddSeconds(15)
-    $runtimeStarted = $false
+    $started = $false
     while ([DateTime]::UtcNow -lt $deadline) {
-        $runtimeStarted = @(
-            Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe'" -ErrorAction SilentlyContinue |
-                Where-Object { $_.CommandLine -like "*$runtimeScript*" }
-        ).Count -gt 0
-        if ($runtimeStarted) { break }
+        $started = -not $hostProcess.HasExited
+        if ($started) { break }
         Start-Sleep -Milliseconds 250
     }
-    if (-not $runtimeStarted) { throw "The installed MuteCue.exe did not start its bundled runtime." }
+    if (-not $started) { throw "The installed MuteCue.exe exited during startup." }
+
+    $powerShellChildren = @(
+        Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+            Where-Object { $_.ParentProcessId -eq $hostProcess.Id -and $_.Name -ieq 'powershell.exe' }
+    )
+    if ($powerShellChildren.Count -gt 0) { throw "The installed MuteCue.exe started PowerShell instead of the native runtime." }
 
     Write-Output "EXE installer smoke test: PASS"
 } finally {
-    $runtimePrefix = [regex]::Escape($installDirectory)
-    Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe'" -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandLine -match $runtimePrefix } |
-        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
     if ($null -ne $hostProcess -and -not $hostProcess.HasExited) {
         Stop-Process -Id $hostProcess.Id -Force -ErrorAction SilentlyContinue
     }

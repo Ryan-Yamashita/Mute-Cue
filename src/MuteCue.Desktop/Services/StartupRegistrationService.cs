@@ -5,14 +5,26 @@ namespace MuteCue.Desktop.Services;
 
 public static class StartupRegistrationService
 {
-    private const string ShortcutName = "Mute Cue Native Preview.lnk";
+    private const string ShortcutName = "Mute Cue.lnk";
 
     private static string ShortcutPath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Startup), ShortcutName);
 
-    public static bool IsRegistered() => File.Exists(ShortcutPath);
+    public static bool IsSupported => AppChannel.SupportsStartupRegistration;
+
+    public static bool IsRegistered() => IsSupported && File.Exists(ShortcutPath);
 
     public static void SetRegistered(bool enabled)
     {
+        if (!IsSupported)
+        {
+            if (enabled)
+            {
+                throw new InvalidOperationException("Development builds cannot register themselves to run on startup.");
+            }
+
+            return;
+        }
+
         if (!enabled)
         {
             if (File.Exists(ShortcutPath))
@@ -30,7 +42,7 @@ public static class StartupRegistrationService
         shortcut.TargetPath = executablePath;
         shortcut.Arguments = "--startup";
         shortcut.WorkingDirectory = Path.GetDirectoryName(executablePath) ?? AppContext.BaseDirectory;
-        shortcut.Description = "Start Mute Cue Native Preview";
+        shortcut.Description = "Start Mute Cue";
         shortcut.Save();
     }
 }

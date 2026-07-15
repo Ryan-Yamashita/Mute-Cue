@@ -7,21 +7,28 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AssemblyName>MuteCue</AssemblyName>
     <RootNamespace>MuteCue.Desktop</RootNamespace>
+    <MuteCueChannel Condition="'$(MuteCueChannel)' == ''">Stable</MuteCueChannel>
     <Version>0.5.2</Version>
     <FileVersion>0.5.2.0</FileVersion>
     <AssemblyVersion>0.5.2.0</AssemblyVersion>
     <PublishSingleFile>true</PublishSingleFile>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
   </PropertyGroup>
+  <PropertyGroup Condition="'$(MuteCueChannel)' == 'Dev'">
+    <AssemblyName>MuteCue-Dev</AssemblyName>
+    <Product>Mute Cue Dev</Product>
+    <Title>Mute Cue Dev</Title>
+    <Description>Local development build of Mute Cue</Description>
+    <DefineConstants>$(DefineConstants);MUTECUE_DEVELOPMENT</DefineConstants>
+  </PropertyGroup>
   <ItemGroup>
     <Resource Include="..\..\Overlay\beacn-logo.png" Link="Assets\beacn-logo.png" />
     <Resource Include="..\..\Overlay\discord-logo.png" Link="Assets\discord-logo.png" />
     <Resource Include="..\..\Overlay\mute-cue-logo.png" Link="Assets\mute-cue-logo.png" />
     <Resource Include="..\..\Overlay\mute-cue-logo-transparent.png" Link="Assets\mute-cue-logo-transparent.png" />
-    <Content Include="..\..\Overlay\*.ps1" Exclude="..\..\Overlay\Build-*.ps1;..\..\Overlay\Install-*.ps1;..\..\Overlay\Uninstall-*.ps1;..\..\Overlay\Invoke-*.ps1;..\..\Overlay\Measure-*.ps1;..\..\Overlay\Remove-*.ps1;..\..\Overlay\Test-*.ps1;..\..\Overlay\MuteCue.Signing.ps1" Link="Runtime\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
-    <Content Include="..\..\Overlay\*.json" Exclude="..\..\Overlay\settings.json;..\..\Overlay\MuteCue.DiscordPublicClient.local*.json;..\..\Overlay\MuteCue.ReleaseManifest.json" Link="Runtime\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
-    <Content Include="..\..\Overlay\*.png" Link="Runtime\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
-    <None Include="..\..\Overlay\bin\MuteCue.Accessibility.dll" Link="Runtime\bin\MuteCue.Accessibility.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <None Include="..\..\Overlay\bin\MuteCue.Accessibility.manifest.json" Link="Runtime\bin\MuteCue.Accessibility.manifest.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="..\..\Overlay\MuteCue.DiscordPublicClient.json" Link="MuteCue.DiscordPublicClient.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
+  <Target Name="ValidateMuteCueChannel" BeforeTargets="PrepareForBuild">
+    <Error Condition="'$(MuteCueChannel)' != 'Stable' and '$(MuteCueChannel)' != 'Dev'" Text="MuteCueChannel must be either Stable or Dev." />
+  </Target>
 </Project>

@@ -12,7 +12,12 @@
     </Grid.RowDefinitions>
 
     <Border Grid.Row="0" Background="{StaticResource ChromeBrush}" BorderBrush="{StaticResource DividerBrush}" BorderThickness="0,0,0,1" Padding="22,12">
-      <Image Source="/Assets/mute-cue-logo-transparent.png" Width="150" Height="43" Stretch="Uniform" HorizontalAlignment="Left" />
+      <Grid>
+        <Image Source="/Assets/mute-cue-logo-transparent.png" Width="150" Height="43" Stretch="Uniform" HorizontalAlignment="Left" />
+        <Border x:Name="DevBadge" Visibility="Collapsed" HorizontalAlignment="Right" VerticalAlignment="Center" Background="#392329" BorderBrush="#FF4352" BorderThickness="1" CornerRadius="4" Padding="9,4">
+          <TextBlock Text="DEV" Foreground="#FF6A76" FontFamily="Segoe UI Semibold" FontSize="12" />
+        </Border>
+      </Grid>
     </Border>
 
     <Border Grid.Row="1" Background="#16181D" BorderBrush="{StaticResource DividerBrush}" BorderThickness="0,0,0,1" Padding="16,7">
@@ -36,11 +41,19 @@
           <TextBlock Text="Connect Discord" FontSize="24" FontFamily="Segoe UI Semibold" Margin="0,8,0,8" />
           <Border Background="{StaticResource ControlBrush}" BorderBrush="{StaticResource DividerBrush}" BorderThickness="1" CornerRadius="4" Padding="12,10" Margin="0,0,0,12">
             <StackPanel>
-              <TextBlock Text="Native Discord monitoring" FontFamily="Segoe UI Semibold" />
-              <TextBlock Text="The native Discord client is being ported with the same local-only consent and DPAPI protection as the stable app." Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="0,5,0,0" />
+              <TextBlock Text="Discord monitoring" FontFamily="Segoe UI Semibold" />
+              <TextBlock Text="Mute Cue reads Discord mute and deafen status only on this computer." Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="0,5,0,0" />
             </StackPanel>
           </Border>
-          <TextBlock Text="The stable Mute Cue runtime remains authoritative while this native preview earns feature parity." Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="0,4,0,0" />
+          <TextBlock x:Name="DiscordStatus" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,8" />
+          <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+            <Button Content="Connect Discord" Style="{StaticResource AccentButton}" Click="ConnectDiscord_OnClick" />
+            <Button Content="Disconnect" Style="{StaticResource ActionButton}" Margin="8,0,0,0" Click="DisconnectDiscord_OnClick" />
+            <Button Content="Forget authorization" Style="{StaticResource ActionButton}" Margin="8,0,0,0" Click="ForgetDiscord_OnClick" />
+          </StackPanel>
+          <Grid Height="38"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Text="Microphone muted" FontSize="14" VerticalAlignment="Center"/><CheckBox x:Name="DiscordMicDetect" Grid.Column="1" Style="{StaticResource MuteCueToggle}" Checked="Setting_OnChanged" Unchecked="Setting_OnChanged"/></Grid>
+          <Grid Height="38"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Text="Deafened" FontSize="14" VerticalAlignment="Center"/><CheckBox x:Name="DiscordDeafenDetect" Grid.Column="1" Style="{StaticResource MuteCueToggle}" Checked="Setting_OnChanged" Unchecked="Setting_OnChanged"/></Grid>
+          <TextBlock Text="NOTE: MUST BE IN A VOICE CHANNEL OR CALL FOR THE OVERLAY TO WORK" FontFamily="Segoe UI Semibold" Foreground="#EFC15A" FontSize="11" TextWrapping="Wrap" Margin="0,4,0,0" />
         </StackPanel>
       </ScrollViewer>
 
@@ -49,15 +62,16 @@
           <TextBlock Text="BEACN Monitoring" FontSize="24" FontFamily="Segoe UI Semibold" Margin="0,8,0,8" />
           <Border Background="#301F17" BorderBrush="#715723" BorderThickness="1" CornerRadius="4" Padding="12,10" Margin="0,0,0,16">
             <StackPanel>
-              <TextBlock Text="Native monitoring migration in progress" Foreground="#EFC15A" FontFamily="Segoe UI Semibold" />
-              <TextBlock Text="This preview safely reads your saved selection but does not yet control or infer BEACN mute state." Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="0,5,0,0" />
+              <TextBlock Text="Native BEACN monitoring" Foreground="#EFC15A" FontFamily="Segoe UI Semibold" />
+              <TextBlock Text="Mute Cue reads BEACN's active mute actions locally and refreshes an affected fader immediately after a desktop click." Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="0,5,0,0" />
             </StackPanel>
           </Border>
+          <TextBlock x:Name="BeacnStatus" Text="Discovering the BEACN mixer layout..." TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,12" />
           <TextBlock Text="Fader Sources" FontSize="18" FontFamily="Segoe UI Semibold" Margin="0,2,0,6" />
           <TextBlock Text="Choose which mute states should show the overlay for each mixer source." Foreground="{StaticResource MutedBrush}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8" />
           <Grid Margin="0,0,0,2"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="92"/><ColumnDefinition Width="112"/></Grid.ColumnDefinitions><TextBlock Text="Source" Foreground="{StaticResource MutedBrush}" FontSize="12"/><TextBlock Grid.Column="1" Text="Mute to All" Foreground="{StaticResource MutedBrush}" FontSize="12" HorizontalAlignment="Center"/><TextBlock Grid.Column="2" Text="Mute to Audience" Foreground="{StaticResource MutedBrush}" FontSize="12" HorizontalAlignment="Center"/></Grid>
           <Border Background="#1B1D22" BorderBrush="{StaticResource DividerBrush}" BorderThickness="1" Padding="8"><StackPanel x:Name="FaderSources"/></Border>
-          <TextBlock Text="Selections are saved to the same compatible Mute Cue settings file. Live discovery, hardware wakeups, and BEACN Knob Mute hotkeys move over after the native worker passes the existing acceptance matrix." Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="0,12,0,0" />
+          <TextBlock Text="Selections are saved to the same Mute Cue settings file used by previous releases." Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="0,12,0,0" />
         </StackPanel>
       </ScrollViewer>
 
@@ -69,8 +83,14 @@
           <Grid Margin="0,2,0,0"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Text="Opacity" FontSize="14"/><TextBlock x:Name="OverlayOpacityValue" Grid.Column="1" Foreground="{StaticResource MutedBrush}" FontFamily="Segoe UI Semibold" FontSize="12"/></Grid>
           <Slider x:Name="OverlayOpacity" Minimum="0.25" Maximum="1" TickFrequency="0.05" Foreground="{StaticResource AccentBrush}" Margin="0,4,0,14" ValueChanged="OverlayOpacity_OnValueChanged" />
           <Grid Height="38"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Text="Click through overlay" FontSize="14" VerticalAlignment="Center"/><CheckBox x:Name="ClickThrough" Grid.Column="1" Style="{StaticResource MuteCueToggle}" Checked="Setting_OnChanged" Unchecked="Setting_OnChanged"/></Grid>
-          <Grid Height="38"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Text="Run on startup" FontSize="14" VerticalAlignment="Center"/><CheckBox x:Name="RunOnStartup" Grid.Column="1" Style="{StaticResource MuteCueToggle}" Checked="RunOnStartup_OnChanged" Unchecked="RunOnStartup_OnChanged"/></Grid>
+          <Grid Height="38"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock x:Name="RunOnStartupLabel" Text="Run on startup" FontSize="14" VerticalAlignment="Center"/><CheckBox x:Name="RunOnStartup" Grid.Column="1" Style="{StaticResource MuteCueToggle}" Checked="RunOnStartup_OnChanged" Unchecked="RunOnStartup_OnChanged"/></Grid>
           <Grid Height="38" Margin="20,0,0,0"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Text="Start in system tray" FontSize="14" VerticalAlignment="Center"/><CheckBox x:Name="StartInTray" Grid.Column="1" Style="{StaticResource MuteCueToggle}" Checked="Setting_OnChanged" Unchecked="Setting_OnChanged"/></Grid>
+          <TextBlock Text="Overlay check" FontSize="18" FontFamily="Segoe UI Semibold" Margin="0,18,0,5" />
+          <TextBlock Text="Show the overlay for six seconds, or center it if it was saved on a disconnected monitor." Foreground="{StaticResource MutedBrush}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,9" />
+          <StackPanel Orientation="Horizontal">
+            <Button Content="Preview Overlay" Style="{StaticResource ActionButton}" Click="PreviewOverlay_OnClick" />
+            <Button Content="Center and Preview" Style="{StaticResource AccentButton}" Margin="8,0,0,0" Click="CenterOverlay_OnClick" />
+          </StackPanel>
         </StackPanel>
       </ScrollViewer>
     </Grid>
