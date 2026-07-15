@@ -9,6 +9,11 @@ function Assert-Packaging {
 $manifestPath = Join-Path $overlayDirectory "MuteCue.ReleaseManifest.json"
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
 Assert-Packaging ([int]$manifest.schemaVersion -eq 1) "The release manifest schema is invalid."
+$nativeFiles = @($manifest.nativeFiles | ForEach-Object { [string]$_ })
+Assert-Packaging ($nativeFiles.Count -eq 2) "The native installer payload must contain exactly two declared files."
+Assert-Packaging ($nativeFiles -contains "MuteCue.exe") "The native installer payload must contain MuteCue.exe."
+Assert-Packaging ($nativeFiles -contains "MuteCue.DiscordPublicClient.json") "The native installer payload must contain the public Discord configuration."
+Assert-Packaging (@($nativeFiles | Where-Object { $_ -match '(?i)\.ps1$|(^|[\\/])Runtime([\\/]|$)' }).Count -eq 0) "The native installer payload must not contain the legacy script runtime."
 foreach ($relativePathValue in @($manifest.files)) {
     $relativePath = [string]$relativePathValue
     Assert-Packaging (-not [System.IO.Path]::IsPathRooted($relativePath) -and -not $relativePath.Contains("..")) "The release manifest contains an unsafe path."

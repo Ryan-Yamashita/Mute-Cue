@@ -1,7 +1,11 @@
 {
   "schemaVersion": 1,
   "product": "Mute Cue",
-  "version": "0.5.2",
+  "version": "0.6.0",
+  "nativeFiles": [
+    "MuteCue.exe",
+    "MuteCue.DiscordPublicClient.json"
+  ],
   "files": [
     "BeacnMuteOverlay.ps1",
     "BeacnAccessibilityClient.ps1",

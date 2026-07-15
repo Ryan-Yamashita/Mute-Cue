@@ -3,10 +3,26 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$overlayDirectory = Split-Path -Parent $MyInvocation.MyCommand.Path
+$manifest = Get-Content -LiteralPath (Join-Path $overlayDirectory "MuteCue.ReleaseManifest.json") -Raw | ConvertFrom-Json
+$nativeFiles = @($manifest.nativeFiles | ForEach-Object { [string]$_ })
+if ($nativeFiles.Count -eq 0) { throw "The native installer payload declaration is missing." }
 $resolvedInstaller = (Resolve-Path -LiteralPath $InstallerPath).Path
 $temporaryRoot = Join-Path ([IO.Path]::GetTempPath()) ("MuteCue.ExeInstaller.{0}" -f [Guid]::NewGuid().ToString("N"))
 $installDirectory = Join-Path $temporaryRoot "installed"
 $hostProcess = $null
+
+function Remove-MuteCueInstallerTestDirectory {
+    param([Parameter(Mandatory)][string]$Path)
+
+    for ($attempt = 0; $attempt -lt 20; $attempt++) {
+        if (-not [IO.Directory]::Exists($Path)) { return }
+        Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction SilentlyContinue
+        if (-not [IO.Directory]::Exists($Path)) { return }
+        Start-Sleep -Milliseconds 250
+    }
+    throw "The temporary installer test directory could not be removed: $Path"
+}
 
 try {
     [void][IO.Directory]::CreateDirectory($temporaryRoot)
@@ -17,19 +33,24 @@ try {
             "/SUPPRESSMSGBOXES",
             "/NORESTART",
             "/SP-",
+            "/NOICONS",
+            "/MUTECUE-SMOKE-TEST",
             ('/DIR="{0}"' -f $installDirectory)
         ) `
         -PassThru `
         -Wait
     if ($installerProcess.ExitCode -ne 0) { throw "Mute Cue Setup exited with code $($installerProcess.ExitCode)." }
 
-    foreach ($relativePath in @(
-        "MuteCue.exe",
-        "MuteCue.DiscordPublicClient.json"
-    )) {
+    foreach ($relativePath in $nativeFiles) {
         if (-not [IO.File]::Exists((Join-Path $installDirectory $relativePath))) {
             throw "The installed Mute Cue application is missing '$relativePath'."
         }
+    }
+    if ([IO.Directory]::Exists((Join-Path $installDirectory "Runtime"))) {
+        throw "The installed native application contains a legacy Runtime directory."
+    }
+    if (@(Get-ChildItem -LiteralPath $installDirectory -Recurse -File -Filter "*.ps1").Count -gt 0) {
+        throw "The installed native application contains PowerShell files."
     }
 
     $installedExecutable = Join-Path $installDirectory "MuteCue.exe"
@@ -66,7 +87,5 @@ try {
     if ($null -ne $hostProcess -and -not $hostProcess.HasExited) {
         Stop-Process -Id $hostProcess.Id -Force -ErrorAction SilentlyContinue
     }
-    if ([IO.Directory]::Exists($temporaryRoot)) {
-        Remove-Item -LiteralPath $temporaryRoot -Recurse -Force -ErrorAction SilentlyContinue
-    }
+    Remove-MuteCueInstallerTestDirectory -Path $temporaryRoot
 }

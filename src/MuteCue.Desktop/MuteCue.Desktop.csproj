@@ -8,9 +8,9 @@
     <AssemblyName>MuteCue</AssemblyName>
     <RootNamespace>MuteCue.Desktop</RootNamespace>
     <MuteCueChannel Condition="'$(MuteCueChannel)' == ''">Stable</MuteCueChannel>
-    <Version>0.5.2</Version>
-    <FileVersion>0.5.2.0</FileVersion>
-    <AssemblyVersion>0.5.2.0</AssemblyVersion>
+    <Version>0.6.0</Version>
+    <FileVersion>0.6.0.0</FileVersion>
+    <AssemblyVersion>0.6.0.0</AssemblyVersion>
     <PublishSingleFile>true</PublishSingleFile>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
   </PropertyGroup>

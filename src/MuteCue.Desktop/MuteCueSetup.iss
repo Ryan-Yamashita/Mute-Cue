@@ -17,6 +17,8 @@ Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
 UninstallDisplayName=Mute Cue
+Uninstallable=not IsSmokeTest
+CreateUninstallRegKey=not IsSmokeTest
 
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Excludes: "*.pdb"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -30,3 +32,19 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 
 [Run]
 Filename: "{app}\MuteCue.exe"; Description: "Launch Mute Cue"; Flags: nowait postinstall skipifsilent
+
+[Code]
+function IsSmokeTest: Boolean;
+var
+  Index: Integer;
+begin
+  Result := False;
+  for Index := 1 to ParamCount do
+  begin
+    if CompareText(ParamStr(Index), '/MUTECUE-SMOKE-TEST') = 0 then
+    begin
+      Result := True;
+      Exit;
+    end;
+  end;
+end;

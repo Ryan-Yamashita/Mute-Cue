@@ -1,35 +1,49 @@
 # Native EXE migration
 
-Mute Cue is moving from a Windows PowerShell/WPF implementation to a native, self-contained .NET WPF executable. This is a compatibility-first migration: the stable PowerShell app remains the supported runtime until a native release meets the same functional and hardware acceptance gates.
+The PowerShell-to-native migration is complete for the v0.6.0 application runtime.
 
-## Why a staged migration
+`src/MuteCue.Desktop` now produces a self-contained WPF `MuteCue.exe` that does not launch `powershell.exe` or ship a legacy `Runtime` directory. The retained PowerShell implementation is source and regression-test material only.
 
-The existing app has non-trivial safety behavior around BEACN accessibility, physical hardware wakeups, global hotkeys, ordered snapshots, geometry changes, Discord authorization, and atomic settings. Wrapping the script in an EXE would not remove the PowerShell runtime or improve those boundaries. The native project therefore replaces components incrementally and keeps each boundary independently testable.
+## Ported runtime boundaries
 
-## Current native slice
+- Native settings, tray, startup registration, overlay, and single-instance ownership
+- Native BEACN UI Automation discovery and authoritative action-row reads
+- Native desktop-click targeting and bounded refresh queues
+- Native BEACN Knob Mute hotkey parsing and low-level keyboard input
+- Native Mix Create USBPcap route discovery, button edges, hardware pages, and calibration
+- Native Discord local RPC authorization, refresh, and DPAPI credential storage
+- Stable/Dev compile-time channel isolation
 
-- `src/MuteCue.Desktop` is a real WPF `MuteCue.exe` target for .NET 10 LTS.
-- It is per-monitor DPI aware, single-instance, normal-user only, and has native system-tray/startup behavior.
-- It reads and writes the existing `%LOCALAPPDATA%\MuteCue\Settings\settings.json` atomically, preserves unknown settings, and keeps the existing backup file.
-- It provides the same compact Discord, BEACN, and Settings shell and reads saved fader sources.
-- It intentionally does **not** enable BEACN or Discord monitoring yet. The stable app remains authoritative until those providers are ported and accepted.
+## Acceptance completed
 
-## Next parity milestones
+- Stable and Dev channel regression suites
+- Warning-free self-contained `win-x64` publish
+- Seven authoritative live BEACN faders
+- Live Mix Create USB route and status packets
+- Real Discord mute/deafen monitoring
+- Real mapped F24 hotkey behavior
+- Real locked-Mic knob mute/unmute behavior
+- Transparent icon-based overlay behavior
+- Installed EXE smoke test with no PowerShell child process
 
-1. Move the precompiled accessibility scanner and authenticated snapshot protocol into native worker projects.
-2. Port the ordered coordinator and geometry-generation fencing, then validate live BEACN desktop, move/resize, restart, and 4/7/8/13-fader cases.
-3. Port hardware wakeups and mapped BEACN Knob Mute shortcuts with the current prediction/confirmation rules.
-4. Port Discord local RPC and DPAPI authorization storage.
-5. Build a self-contained signed `win-x64` release, run the exact-archive installation gate, and perform clean-machine beta acceptance before switching the default installer.
+## Release boundary
+
+The native installer contains only the self-contained executable and the public Discord client configuration. It must not contain `.ps1` files or a `Runtime` directory.
+
+The release remains an unsigned community beta until an Authenticode signing identity is available. Every GitHub release includes a SHA-256 checksum and must be built from a tag already contained in `main`.
 
 ## Build locally
 
-The project pins the .NET 10 SDK in `global.json`.
+Use the repository-root Dev launcher for normal iteration:
 
-```powershell
-dotnet build .\src\MuteCue.Desktop\MuteCue.Desktop.csproj --configuration Release
-dotnet run --project .\src\MuteCue.Desktop.Tests\MuteCue.Desktop.Tests.csproj --configuration Release
-dotnet publish .\src\MuteCue.Desktop\MuteCue.Desktop.csproj --configuration Release --runtime win-x64 --self-contained true
+```text
+Build and Launch Mute Cue Dev.cmd
 ```
 
-Do not distribute the native preview yet. A release must satisfy the parity and signing gates above.
+Build Stable directly when validating release behavior:
+
+```powershell
+dotnet publish .\src\MuteCue.Desktop\MuteCue.Desktop.csproj --configuration Release --runtime win-x64 --self-contained true -p:MuteCueChannel=Stable
+```
+
+See [Local development](LOCAL_DEVELOPMENT.md) and the root [Release checklist](../RELEASE_CHECKLIST.md).

@@ -1,65 +1,74 @@
 # Mute Cue
 
-Mute Cue is a Windows overlay that shows BEACN Mix Create and Discord mute states without covering the screen with mixer controls.
+Mute Cue is a native Windows overlay that shows BEACN Mix Create and Discord mute states without keeping mixer controls open on screen.
 
 Mute Cue is available under the [MIT License](LICENSE).
 
-> **Community beta.** Mute Cue is actively being tested with the BEACN desktop app. Please review the supported setup below and report reproducible problems using the included diagnostics rather than sharing settings, packet captures, or credentials.
+> **Community beta.** Mute Cue is actively tested with the BEACN desktop app. The Windows installer is currently unsigned, so Windows may show an unknown-publisher or SmartScreen warning.
+
+## Download
+
+Download the newest installer and its SHA-256 checksum from [GitHub Releases](https://github.com/Ryan-Yamashita/Mute-Cue/releases/latest).
+
+Use only release assets published by this repository. Each release contains:
+
+- `MuteCue-<version>-Setup.exe`
+- `MuteCue-<version>-Setup.exe.sha256`
+
+The installer runs for the current Windows user and places the application under `%LOCALAPPDATA%\Programs\MuteCue`. Settings and encrypted Discord authorization remain under `%LOCALAPPDATA%\MuteCue` when the application is updated or uninstalled.
 
 ## Requirements
 
-- Windows PowerShell 5.1 and .NET Framework 4.8
-- The BEACN desktop app for authoritative per-fader state
-- A BEACN Mix Create for physical fader-button monitoring
-- [USBPcap](https://desowin.org/usbpcap/) for immediate hardware-button wakeups (optional, but recommended)
+- Windows 10 or Windows 11 on x64
+- The BEACN desktop app for authoritative per-fader mute state
+- A BEACN Mix Create for physical knob-button monitoring
+- [USBPcap](https://desowin.org/usbpcap/) for immediate physical-button response (optional but recommended)
+- Discord desktop if Discord mute/deafen monitoring is enabled
 
-BEACN application binaries, drivers, personal profiles, packet captures, settings, and credentials are deliberately excluded from source control. Install BEACN and USBPcap from their official distributions.
+The release is a self-contained native .NET WPF application. Users do not need to install .NET, Windows PowerShell, or any Mute Cue scripts.
 
-## Install (recommended)
+## Features
 
-Double-click [`Overlay/Install Mute Cue.cmd`](Overlay/Install%20Mute%20Cue.cmd). Mute Cue installs for the current Windows user, starts without administrator privileges, and can start automatically after sign-in. Application releases are stored as immutable version directories so an update can switch versions atomically and retain the previous release for rollback.
+- Transparent, click-through-capable BEACN and Discord overlay
+- Independent BEACN **Mute to All** and **Mute to Audience** monitoring
+- Native Mix Create USB button and page tracking
+- Native support for BEACN Knob Mute hotkeys, including live mapping-file reloads
+- Native Discord local RPC authorization and mute/deafen monitoring
+- Per-user encrypted Discord authorization using Windows DPAPI
+- System tray, run-on-startup, overlay positioning, opacity, and size controls
+- Separate Stable and Dev channels for safe local testing
 
-Settings, credentials, logs, and worker files live under `%LOCALAPPDATA%\MuteCue`; application binaries live under `%LOCALAPPDATA%\Programs\MuteCue`. Uninstall preserves settings by default.
+BEACN's displayed action rows remain authoritative. Mouse clicks, mapped hotkeys, and USB packets request immediate targeted reads and may show a short guarded prediction only when the fader and hardware mapping are already known.
 
-## Portable run
+## Local data and privacy
 
-Open [`Overlay/Start Beacn Mute Overlay.cmd`](Overlay/Start%20Beacn%20Mute%20Overlay.cmd). Mute Cue starts with normal Windows permissions. The compact top tabs open **Discord** by default, put mixer monitoring and the always-visible **Fader Sources** list under **BEACN**, and put overlay and startup behavior under **Settings**. In **BEACN**, enable **Monitor BEACN hardware** and select which **Mute to All** and **Mute to Audience** states should appear.
+Mute Cue is local-only and has no analytics or Mute Cue server. It reads the minimum local state needed to render the overlay and does not read Discord messages, contacts, server lists, or voice audio.
 
-The BEACN section reports live compatibility, computer readiness, discovered fader count, BEACN version, and whether optional USB fast response is active. Fader order, lock state, active-profile changes, worker recovery, and window movement are handled automatically. Mute Cue follows BEACN's own Knob Mute assignments, so a shortcut such as F24 mapped to Mic gets an immediate guarded preview and an urgent Mic / Mute All reread without a second Mute Cue binding. BEACN's displayed row remains authoritative and confirms or retracts that preview. First-time hardware presses on an unknown page use a cheap output-edge locator before the authoritative row read instead of immediately scanning every fader. Use **Copy BEACN diagnostics** for a privacy-safe health report.
+Never share settings files, Discord authorization files, packet captures, certificates, or BEACN profile data. See [Privacy](PRIVACY.md) and [Security](SECURITY.md).
 
-Under **Settings**, **Run on startup** controls the current user's Windows sign-in shortcut. When it is enabled, **Start in system tray** becomes available and hides the settings window only for sign-in launches; opening Mute Cue manually still shows the window.
+## Local development
 
-Settings and Discord authorization remain local to the current Windows account. Authorization tokens are protected with Windows DPAPI; Mute Cue never stores a Discord client secret.
+Double-click [`Build and Launch Mute Cue Dev.cmd`](Build%20and%20Launch%20Mute%20Cue%20Dev.cmd) to replace and launch the fixed local Dev executable without installing or publishing anything. Dev uses `%LOCALAPPDATA%\MuteCue-Dev` and cannot change Stable startup registration.
 
-For a public Discord release, Mute Cue uses one built-in public client and users never enter Discord developer credentials. See [DISCORD_RELEASE.md](DISCORD_RELEASE.md) for the approval and release handoff.
+See [Local development](docs/LOCAL_DEVELOPMENT.md) and [Architecture](ARCHITECTURE.md).
 
 ## Verification
 
-Run the complete local test suite from Windows PowerShell:
+Run the native Stable and Dev checks:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Overlay\Tests\Run-All.ps1
+dotnet run --project .\src\MuteCue.Desktop.Tests\MuteCue.Desktop.Tests.csproj --configuration Release -p:MuteCueChannel=Stable
+dotnet run --project .\src\MuteCue.Desktop.Tests\MuteCue.Desktop.Tests.csproj --configuration Release -p:MuteCueChannel=Dev -- --expect-dev
 ```
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the state model, failure boundaries, security model, and platform constraints.
+The retained compatibility suite can also be run on Windows:
 
-## Supported beta setup
+```powershell
+.\Overlay\Tests\Run-All.ps1
+```
 
-- Windows 10 or Windows 11, standard user account
-- BEACN desktop app version 1.2.x, in English, at the same Windows privilege level as Mute Cue
-- BEACN Mix Create (hardware monitoring is optional, but required for physical-control feedback)
-- Any normal display layout, including multiple monitors and high-DPI scaling
+## Reporting problems
 
-Mute Cue reads the live desktop client as its source of truth. The optional USBPcap integration only helps the overlay wake immediately after a physical hardware press; it is not required for correct state.
+Open a GitHub issue with your Windows version, BEACN version, affected fader and mute mode, and exact reproduction steps. Do not attach private runtime files or raw USB captures.
 
-## Help test the beta
-
-Start with [Beta testing](docs/BETA_TESTING.md). Before opening an issue, use **Copy BEACN diagnostics** in the app and include the resulting text along with your Windows version, BEACN version, and the exact steps that caused the problem. Do not include personal settings files, Discord authorization files, packet captures, or code-signing certificates.
-
-## Privacy and security
-
-Read [Privacy](PRIVACY.md) for the local-data model and [Security](SECURITY.md) for how to report a vulnerability privately.
-
-## Native EXE migration
-
-Mute Cue now contains the foundation for a self-contained native Windows executable. It is being migrated component by component so the final EXE can meet the existing BEACN safety and responsiveness guarantees without relying on PowerShell. The native preview is not a public download yet; see [Native EXE migration](docs/NATIVE_MIGRATION.md) for its current scope and release gates.
+The PowerShell implementation remains in `Overlay` as compatibility-test and migration reference material. It is not included in the native installer.

@@ -39,16 +39,20 @@ jobs:
           if ($env:GITHUB_REF_NAME -cne $expectedTag) {
             throw "Tag '$env:GITHUB_REF_NAME' must exactly match release manifest version '$expectedTag'."
           }
+          git merge-base --is-ancestor $env:GITHUB_SHA origin/main
+          if ($LASTEXITCODE -ne 0) {
+            throw "Release tag '$env:GITHUB_REF_NAME' must point to a commit already contained in main."
+          }
           if ($env:DISCORD_APPLICATION_ID -notmatch '^\d{17,22}$') {
             throw 'The production environment is missing a valid MUTE_CUE_DISCORD_APPLICATION_ID secret.'
           }
           "version=$($manifest.version)" >> $env:GITHUB_OUTPUT
 
-      - name: Build and test the native compatibility layer
+      - name: Build and test the Stable native runtime
         shell: powershell
         run: |
-          dotnet build .\src\MuteCue.Desktop.Tests\MuteCue.Desktop.Tests.csproj --configuration Release --nologo
-          dotnet run --project .\src\MuteCue.Desktop.Tests\MuteCue.Desktop.Tests.csproj --configuration Release --no-build --nologo
+          dotnet build .\src\MuteCue.Desktop.Tests\MuteCue.Desktop.Tests.csproj --configuration Release --nologo -p:MuteCueChannel=Stable
+          dotnet run --project .\src\MuteCue.Desktop.Tests\MuteCue.Desktop.Tests.csproj --configuration Release --no-build --nologo -p:MuteCueChannel=Stable
 
       - name: Install the Windows installer compiler
         shell: powershell
@@ -72,6 +76,10 @@ jobs:
           $installer = ".\artifacts\release\MuteCue-$env:RELEASE_VERSION-Setup.exe"
           $checksum = "$installer.sha256"
           $notes = @'
+          ## Native Windows application
+
+          Mute Cue now runs as one self-contained native Windows executable. The installed application does not require .NET or PowerShell and does not ship a legacy script runtime.
+
           ## Important: unsigned Windows installer
 
           This community release is intentionally not Authenticode-signed. Windows may show an "unknown publisher" or SmartScreen warning. Download only from this official Mute Cue GitHub release, verify the included SHA-256 checksum, and inspect the source before running it if you are not comfortable accepting that risk.

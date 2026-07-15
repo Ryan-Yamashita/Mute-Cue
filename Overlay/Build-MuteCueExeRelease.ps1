@@ -13,6 +13,19 @@ $manifest = Get-Content -LiteralPath (Join-Path $overlayDirectory "MuteCue.Relea
 if ([int]$manifest.schemaVersion -ne 1 -or [string]$manifest.version -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$') {
     throw "The release manifest is invalid."
 }
+$nativeFiles = @($manifest.nativeFiles | ForEach-Object { [string]$_ })
+if (
+    $nativeFiles.Count -ne 2 -or
+    $nativeFiles -notcontains "MuteCue.exe" -or
+    $nativeFiles -notcontains "MuteCue.DiscordPublicClient.json"
+) {
+    throw "The release manifest must declare the exact native installer payload."
+}
+foreach ($relativePath in $nativeFiles) {
+    if ([IO.Path]::IsPathRooted($relativePath) -or $relativePath.Contains("..") -or $relativePath -match '(?i)\.ps1$') {
+        throw "The native release manifest contains an unsafe path '$relativePath'."
+    }
+}
 if ($DiscordApplicationId -notmatch '^\d{17,22}$') {
     throw "DiscordApplicationId must contain 17 to 22 digits."
 }
@@ -34,7 +47,6 @@ function Find-MuteCueInnoSetupCompiler {
     throw "Inno Setup 6 is required to build MuteCue-Setup.exe. Install Inno Setup, then try again."
 }
 
-& (Join-Path $overlayDirectory "Build-MuteCueAccessibilityAssembly.ps1") | Out-Host
 if (-not $SkipTests) {
     & (Join-Path $overlayDirectory "Tests\Run-All.ps1") | Out-Host
 }
@@ -55,8 +67,16 @@ if (-not [IO.Directory]::Exists($resolvedOutput)) { [void][IO.Directory]::Create
 try {
     $publishDirectory = Join-Path $stagingDirectory "publish"
     $projectPath = Join-Path $repositoryRoot "src\MuteCue.Desktop\MuteCue.Desktop.csproj"
-    dotnet publish $projectPath --configuration Release --runtime win-x64 --self-contained true --output $publishDirectory --nologo
+    dotnet publish $projectPath --configuration Release --runtime win-x64 --self-contained true --output $publishDirectory --nologo -p:MuteCueChannel=Stable
     if ($LASTEXITCODE -ne 0) { throw "The native Mute Cue executable did not publish successfully." }
+
+    if ([IO.Directory]::Exists((Join-Path $publishDirectory "Runtime"))) {
+        throw "The native publish unexpectedly contains a legacy Runtime directory."
+    }
+    $powerShellFiles = @(Get-ChildItem -LiteralPath $publishDirectory -Recurse -File -Filter "*.ps1")
+    if ($powerShellFiles.Count -gt 0) {
+        throw "The native publish unexpectedly contains PowerShell files."
+    }
 
     $discordConfiguration = [ordered]@{
         schemaVersion = 1
@@ -69,10 +89,7 @@ try {
         (New-Object Text.UTF8Encoding($false))
     )
 
-    foreach ($relativePath in @(
-        "MuteCue.exe",
-        "MuteCue.DiscordPublicClient.json"
-    )) {
+    foreach ($relativePath in $nativeFiles) {
         if (-not [IO.File]::Exists((Join-Path $publishDirectory $relativePath))) {
             throw "The published installer payload is missing '$relativePath'."
         }

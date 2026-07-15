@@ -13,8 +13,11 @@ Assert-ReleasePipeline ([string]$manifest.version -match '^\d+\.\d+\.\d+(?:-[0-9
 $builder = [IO.File]::ReadAllText((Join-Path $overlayDirectory "Build-MuteCueExeRelease.ps1"))
 foreach ($requiredBuilderGate in @(
     'dotnet publish $projectPath --configuration Release --runtime win-x64 --self-contained true',
-    'MuteCue.Accessibility.dll',
+    '-p:MuteCueChannel=Stable',
+    '$manifest.nativeFiles',
     'MuteCue.DiscordPublicClient.json',
+    'legacy Runtime directory',
+    'PowerShell files',
     'Test-MuteCueExeInstaller.ps1',
     'Inno Setup 6 is required'
 )) {
@@ -38,6 +41,8 @@ $workflow = [IO.File]::ReadAllText($workflowPath)
 foreach ($requiredWorkflowGate in @(
     'environment: production',
     'MUTE_CUE_DISCORD_APPLICATION_ID',
+    'merge-base --is-ancestor',
+    'MuteCueChannel=Stable',
     'choco install innosetup',
     'dotnet run --project',
     'Build-MuteCueExeRelease.ps1',
@@ -45,6 +50,7 @@ foreach ($requiredWorkflowGate in @(
     'gh release create',
     '--verify-tag',
     '--notes-file',
+    'Native Windows application',
     'Important: unsigned Windows installer'
 )) {
     Assert-ReleasePipeline ($workflow.Contains($requiredWorkflowGate)) "The production workflow is missing '$requiredWorkflowGate'."
@@ -54,5 +60,19 @@ Assert-ReleasePipeline ([regex]::IsMatch($workflow, 'actions/setup-dotnet@[a-f0-
 Assert-ReleasePipeline (-not $workflow.Contains('-SkipTests')) "The production workflow must not skip release tests."
 Assert-ReleasePipeline (-not $workflow.Contains('--clobber')) "Published release assets must remain immutable."
 Assert-ReleasePipeline (-not $workflow.Contains('MUTE_CUE_SIGNING_CERTIFICATE')) "The unsigned release workflow must not require a private signing key."
+
+$installerScript = [IO.File]::ReadAllText((Join-Path $repositoryRoot "src\MuteCue.Desktop\MuteCueSetup.iss"))
+foreach ($requiredInstallerGate in @(
+    'Uninstallable=not IsSmokeTest',
+    'CreateUninstallRegKey=not IsSmokeTest',
+    '/MUTECUE-SMOKE-TEST'
+)) {
+    Assert-ReleasePipeline ($installerScript.Contains($requiredInstallerGate)) "The native installer is missing '$requiredInstallerGate'."
+}
+
+$installerTest = [IO.File]::ReadAllText((Join-Path $overlayDirectory "Test-MuteCueExeInstaller.ps1"))
+foreach ($requiredInstallerTestGate in @('/NOICONS', '/MUTECUE-SMOKE-TEST')) {
+    Assert-ReleasePipeline ($installerTest.Contains($requiredInstallerTestGate)) "The native installer smoke test is missing '$requiredInstallerTestGate'."
+}
 
 "Release pipeline tests: PASS"

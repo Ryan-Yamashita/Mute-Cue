@@ -4,23 +4,34 @@ Thanks for helping test and improve Mute Cue.
 
 ## Before opening an issue
 
-1. Use the current source and run the full local verification suite:
+1. Reproduce the problem with current source and the BEACN desktop app running at the same Windows privilege level.
+2. Record the Windows version, BEACN version, affected fader, mute mode, and exact input path.
+3. Describe whether the issue occurs with a desktop click, mapped hotkey, or physical Mix Create control.
 
-   ```powershell
-   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Overlay\Tests\Run-All.ps1
-   ```
+Do not attach settings, Discord authorization, packet captures, certificates, BEACN profiles, or local `Program`/`Settings` directories.
 
-2. Reproduce the issue with the BEACN desktop app and Mute Cue running at the same Windows privilege level.
-3. In Mute Cue, select **Copy BEACN diagnostics** and include its text in the report.
-4. Describe the exact button, knob, hotkey, or desktop action that triggered the result.
+## Verification
 
-Do not attach `settings.json`, Discord authorization data, packet captures, certificates, BEACN profiles, or anything from the local `Program` or `Settings` folders. Those files are intentionally excluded from source control because they can contain personal or machine-specific information.
+Run both native channels:
+
+```powershell
+dotnet run --project .\src\MuteCue.Desktop.Tests\MuteCue.Desktop.Tests.csproj --configuration Release -p:MuteCueChannel=Stable
+dotnet run --project .\src\MuteCue.Desktop.Tests\MuteCue.Desktop.Tests.csproj --configuration Release -p:MuteCueChannel=Dev -- --expect-dev
+```
+
+Run the retained compatibility suite when changing BEACN state, packaging, or migration behavior:
+
+```powershell
+.\Overlay\Tests\Run-All.ps1
+```
 
 ## Development workflow
 
-- Make focused changes and keep unrelated formatting out of the same pull request.
-- Run the full test suite above before requesting review.
-- Update user-facing documentation when behavior or supported setup changes.
-- Test new BEACN behavior with the application window moved, resized, and on a different monitor when possible.
+- Use `Build and Launch Mute Cue Dev.cmd` for normal local iteration.
+- Keep unrelated formatting out of focused changes.
+- Preserve bounded queues, authoritative confirmation, and fail-closed mapping behavior.
+- Update user-facing documentation with behavior or support changes.
+- Test BEACN changes with window movement, page changes, and mixed display scaling when possible.
+- Never commit generated EXEs, local Discord configuration, credentials, packet captures, or signing material.
 
-The project’s release artifacts are built and signed separately. Do not publish manually assembled archives; follow [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md).
+Release assets are built only by the tagged GitHub workflow. Do not publish manually assembled installers.
