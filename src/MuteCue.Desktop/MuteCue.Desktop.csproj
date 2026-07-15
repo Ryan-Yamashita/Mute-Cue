@@ -7,9 +7,9 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AssemblyName>MuteCue</AssemblyName>
     <RootNamespace>MuteCue.Desktop</RootNamespace>
-    <Version>0.5.1</Version>
-    <FileVersion>0.5.1.0</FileVersion>
-    <AssemblyVersion>0.5.1.0</AssemblyVersion>
+    <Version>0.5.2</Version>
+    <FileVersion>0.5.2.0</FileVersion>
+    <AssemblyVersion>0.5.2.0</AssemblyVersion>
     <PublishSingleFile>true</PublishSingleFile>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
   </PropertyGroup>

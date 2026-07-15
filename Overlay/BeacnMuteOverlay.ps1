@@ -4840,10 +4840,19 @@ function Update-BeacnDesktopClickActions {
                     'REQUEST desktop {0}/{1}; preview=1' -f $publishedTarget.Name, $publishedTarget.Mode
                 )
             }
-            if (
-                (Request-BeacnPointRefresh -X ([double]$workerClickX) -Y ([double]$workerClickY)) -and
-                $shouldFollowUp
-            ) {
+            # Once the live fader rows identify the clicked action, use the same
+            # priority lane as a configured keyboard shortcut. Point refreshes are
+            # retained only for an unknown click, where guessing a fader would be
+            # unsafe. This keeps mouse actions from waiting behind a normal scan.
+            $refreshRequested = if ($shouldFollowUp) {
+                Request-BeacnFaderRefresh `
+                    -Name ([string]$publishedTarget.Name) `
+                    -Mode ([string]$publishedTarget.Mode) `
+                    -Urgent
+            } else {
+                Request-BeacnPointRefresh -X ([double]$workerClickX) -Y ([double]$workerClickY)
+            }
+            if ($refreshRequested -and $shouldFollowUp) {
                 Add-BeacnPointRefreshFollowUps -X ([double]$workerClickX) -Y ([double]$workerClickY)
             }
             $workerClickX = 0

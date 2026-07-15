@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "product": "Mute Cue",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "files": [
     "BeacnMuteOverlay.ps1",
     "BeacnAccessibilityClient.ps1",

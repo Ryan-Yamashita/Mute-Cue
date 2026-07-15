@@ -257,6 +257,9 @@ foreach ($latencyGuarantee in @(
         throw "The low-latency BEACN action path is missing '$latencyGuarantee'."
     }
 }
+if (-not $source.Contains('-Name ([string]$publishedTarget.Name) `')) {
+    throw 'A resolved desktop click must use the urgent exact-fader refresh path.'
+}
 $urgentDrain = $source.IndexOf('DrainActionRefreshes(pendingUrgentActionRefreshes', [StringComparison]::Ordinal)
 $ordinaryDrain = $source.IndexOf('DrainActionRefreshes(pendingActionRefreshes', [StringComparison]::Ordinal)
 if ($urgentDrain -lt 0 -or $ordinaryDrain -lt 0 -or $urgentDrain -ge $ordinaryDrain) {
