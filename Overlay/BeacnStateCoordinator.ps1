@@ -6,7 +6,9 @@ function New-BeacnStateCoordinator {
         WorkerInstanceId = ""
         WorkerGeneration = 0L
         LastProviderSequence = 0L
+        LastProviderStateRevision = 0L
         LastProviderHeartbeatUtc = [DateTime]::MinValue
+        LastProviderStateUtc = [DateTime]::MinValue
         LastAcceptedUtc = [DateTime]::MinValue
         LastAuthoritativeUtc = [DateTime]::MinValue
         GeometryFingerprint = ""
@@ -15,6 +17,7 @@ function New-BeacnStateCoordinator {
         LastRejection = ""
         LastSnapshot = $null
         LastAdapterResult = $null
+        RetiredWorkerIds = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
     }
 }
 
@@ -57,6 +60,7 @@ function New-BeacnRejectedProviderResult {
         GeometryGeneration = [long]$Coordinator.GeometryGeneration
         WorkerGeneration = [long]$Coordinator.WorkerGeneration
         Publishable = $false
+        ProviderAccepted = $false
     }
 }
 
@@ -65,7 +69,8 @@ function Submit-BeacnProviderSnapshot {
         [Parameter(Mandatory)][object]$Coordinator,
         [Parameter(Mandatory)][object]$Snapshot,
         [DateTime]$Now = [DateTime]::UtcNow,
-        [int]$MaximumFaders = 64
+        [int]$MaximumFaders = 64,
+        [double]$MaximumStateAgeSeconds = 5
     )
 
     $instanceId = ([string]$Snapshot.WorkerInstanceId).Trim()
@@ -91,9 +96,17 @@ function Submit-BeacnProviderSnapshot {
     }
 
     if ($Coordinator.WorkerInstanceId -ne $instanceId) {
+        if ($Coordinator.RetiredWorkerIds.Contains($instanceId)) {
+            return New-BeacnRejectedProviderResult -Coordinator $Coordinator -Reason "retired worker identity"
+        }
+        if (-not [string]::IsNullOrWhiteSpace([string]$Coordinator.WorkerInstanceId)) {
+            [void]$Coordinator.RetiredWorkerIds.Add([string]$Coordinator.WorkerInstanceId)
+            Reset-BeacnAdapterPendingConfirmations -Adapter $Coordinator.Adapter
+        }
         $Coordinator.WorkerInstanceId = $instanceId
         $Coordinator.WorkerGeneration++
         $Coordinator.LastProviderSequence = 0L
+        $Coordinator.LastProviderStateRevision = 0L
     }
     if ($sequence -le [long]$Coordinator.LastProviderSequence) {
         return [pscustomobject]@{
@@ -106,7 +119,52 @@ function Submit-BeacnProviderSnapshot {
             GeometryGeneration = [long]$Coordinator.GeometryGeneration
             WorkerGeneration = [long]$Coordinator.WorkerGeneration
             Publishable = $false
+            ProviderAccepted = $false
         }
+    }
+
+    $Coordinator.LastProviderSequence = $sequence
+    $Coordinator.LastProviderHeartbeatUtc = $capturedAt
+    $Coordinator.LastSnapshot = $Snapshot
+
+    $stateRevision = $sequence
+    $stateRevisionProperty = $Snapshot.PSObject.Properties['StateRevision']
+    if ($null -ne $stateRevisionProperty) {
+        if (-not [long]::TryParse([string]$stateRevisionProperty.Value, [ref]$stateRevision) -or $stateRevision -lt 0) {
+            return New-BeacnRejectedProviderResult -Coordinator $Coordinator -Reason "invalid state revision"
+        }
+    }
+    if ($stateRevision -eq 0 -or $stateRevision -le [long]$Coordinator.LastProviderStateRevision) {
+        return [pscustomobject]@{
+            Accepted = $false
+            Duplicate = $true
+            Rejected = $false
+            Reason = "heartbeat without a new state revision"
+            AdapterResult = $Coordinator.LastAdapterResult
+            GeometryChanged = $false
+            GeometryGeneration = [long]$Coordinator.GeometryGeneration
+            WorkerGeneration = [long]$Coordinator.WorkerGeneration
+            Publishable = $false
+            ProviderAccepted = $true
+        }
+    }
+
+    $stateCapturedAt = $capturedAt
+    $stateCapturedProperty = $Snapshot.PSObject.Properties['StateCapturedAtUtc']
+    if ($null -ne $stateCapturedProperty -and -not [string]::IsNullOrWhiteSpace([string]$stateCapturedProperty.Value)) {
+        if (-not [DateTime]::TryParse(
+            [string]$stateCapturedProperty.Value,
+            [Globalization.CultureInfo]::InvariantCulture,
+            [Globalization.DateTimeStyles]::AssumeUniversal,
+            [ref]$stateCapturedAt
+        )) {
+            return New-BeacnRejectedProviderResult -Coordinator $Coordinator -Reason "invalid state timestamp"
+        }
+        $stateCapturedAt = $stateCapturedAt.ToUniversalTime()
+    }
+    $stateAgeSeconds = ($Now - $stateCapturedAt).TotalSeconds
+    if ($stateAgeSeconds -lt -5 -or $stateAgeSeconds -gt $MaximumStateAgeSeconds) {
+        return New-BeacnRejectedProviderResult -Coordinator $Coordinator -Reason "stale state observation"
     }
 
     $rawStates = @($Snapshot.States)
@@ -121,9 +179,8 @@ function Submit-BeacnProviderSnapshot {
         }
     }
 
-    $Coordinator.LastProviderSequence = $sequence
-    $Coordinator.LastProviderHeartbeatUtc = $capturedAt
-    $Coordinator.LastSnapshot = $Snapshot
+    $Coordinator.LastProviderStateRevision = $stateRevision
+    $Coordinator.LastProviderStateUtc = $stateCapturedAt
     $geometryFingerprint = Get-BeacnGeometryFingerprint -States $rawStates
     $geometryChanged = $geometryFingerprint -ne [string]$Coordinator.GeometryFingerprint
     if ($geometryChanged) {
@@ -135,7 +192,7 @@ function Submit-BeacnProviderSnapshot {
     $Coordinator.LastAdapterResult = $adapterResult
     $Coordinator.LastAcceptedUtc = $Now
     if ([bool]$adapterResult.HasActionAuthority) {
-        $Coordinator.LastAuthoritativeUtc = $Now
+        $Coordinator.LastAuthoritativeUtc = $stateCapturedAt
     }
     [pscustomobject]@{
         Accepted = $true
@@ -147,6 +204,7 @@ function Submit-BeacnProviderSnapshot {
         GeometryGeneration = [long]$Coordinator.GeometryGeneration
         WorkerGeneration = [long]$Coordinator.WorkerGeneration
         Publishable = [bool]$adapterResult.HasAuthority
+        ProviderAccepted = $true
     }
 }
 
@@ -169,11 +227,16 @@ function Get-BeacnCoordinatorHealth {
     } else {
         ($Now - [DateTime]$Coordinator.LastAuthoritativeUtc).TotalSeconds
     }
+    $stateAge = if ($Coordinator.LastProviderStateUtc -eq [DateTime]::MinValue) {
+        [double]::PositiveInfinity
+    } else {
+        ($Now - [DateTime]$Coordinator.LastProviderStateUtc).TotalSeconds
+    }
     $status = if (-not $WorkerRunning) {
         "WorkerStopped"
     } elseif ($heartbeatAge -ge $UnavailableAfterSeconds) {
         "Unavailable"
-    } elseif ($heartbeatAge -ge $StaleAfterSeconds) {
+    } elseif ($heartbeatAge -ge $StaleAfterSeconds -or $stateAge -ge $StaleAfterSeconds) {
         "Recovering"
     } elseif ($null -ne $Coordinator.LastAdapterResult -and [bool]$Coordinator.LastAdapterResult.HasActionAuthority) {
         "Healthy"
@@ -185,6 +248,7 @@ function Get-BeacnCoordinatorHealth {
         WorkerRunning = $WorkerRunning
         HeartbeatAgeSeconds = $heartbeatAge
         AuthorityAgeSeconds = $authorityAge
+        StateAgeSeconds = $stateAge
         WorkerGeneration = [long]$Coordinator.WorkerGeneration
         GeometryGeneration = [long]$Coordinator.GeometryGeneration
         LayoutGeneration = [long]$Coordinator.Adapter.LayoutGeneration

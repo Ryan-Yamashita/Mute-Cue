@@ -10,6 +10,7 @@ $tests = @(
     "AtomicFile.Tests.ps1",
     "AccessibilityRuntime.Tests.ps1",
     "Signing.Tests.ps1",
+    "ReleasePipeline.Tests.ps1",
     "BeacnActionState.Tests.ps1",
     "BeacnAdapter.Tests.ps1",
     "BeacnIsolation.Tests.ps1",

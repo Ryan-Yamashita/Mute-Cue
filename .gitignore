@@ -9,6 +9,7 @@ Overlay/.launch-*.log
 # Per-user credentials (DPAPI-encrypted, but still private and machine-specific)
 Overlay/.discord-client-secret.dat
 Overlay/.discord-authorization.dat
+Overlay/MuteCue.DiscordPublicClient.local.json
 
 # Packet captures can contain unrelated USB traffic and are very large
 *.pcap

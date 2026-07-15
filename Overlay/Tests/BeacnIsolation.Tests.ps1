@@ -36,11 +36,20 @@ function New-IsolationRawFader {
 }
 
 function New-ProviderSnapshot {
-    param([string]$Worker, [long]$Sequence, [object[]]$States, [DateTime]$At = [DateTime]::UtcNow)
+    param(
+        [string]$Worker,
+        [long]$Sequence,
+        [object[]]$States,
+        [DateTime]$At = [DateTime]::UtcNow,
+        [long]$StateRevision = $Sequence,
+        [DateTime]$StateAt = $At
+    )
     [pscustomobject]@{
         WorkerInstanceId = $Worker
         Sequence = $Sequence
         CapturedAtUtc = $At.ToString("o")
+        StateRevision = $StateRevision
+        StateCapturedAtUtc = $StateAt.ToString("o")
         States = $States
     }
 }
@@ -56,6 +65,20 @@ Assert-Isolation $first.Accepted "The first valid provider snapshot must be acce
 $duplicate = Submit-BeacnProviderSnapshot -Coordinator $coordinator -Snapshot (New-ProviderSnapshot -Worker "worker-a" -Sequence 1 -States $baseStates)
 Assert-Isolation $duplicate.Duplicate "Duplicate provider sequences must be ignored."
 
+$confirmationAdapter = New-BeacnAdapterState
+$confirmationCoordinator = New-BeacnStateCoordinator -Adapter $confirmationAdapter
+[void](Submit-BeacnProviderSnapshot -Coordinator $confirmationCoordinator -Snapshot (New-ProviderSnapshot -Worker "confirmation-worker" -Sequence 1 -StateRevision 1 -States $baseStates))
+$oneRead = Submit-BeacnProviderSnapshot -Coordinator $confirmationCoordinator -Snapshot (New-ProviderSnapshot -Worker "confirmation-worker" -Sequence 2 -StateRevision 2 -States $baseStates)
+$heartbeat = Submit-BeacnProviderSnapshot -Coordinator $confirmationCoordinator -Snapshot (New-ProviderSnapshot -Worker "confirmation-worker" -Sequence 3 -StateRevision 2 -States $baseStates)
+Assert-Isolation ($oneRead.Accepted -and $oneRead.AdapterResult.NeedsConfirmation -and -not $oneRead.AdapterResult.HasActionAuthority) "The first real state read must remain unconfirmed."
+Assert-Isolation ($heartbeat.Duplicate -and $heartbeat.ProviderAccepted -and -not $confirmationCoordinator.LastAdapterResult.HasActionAuthority) "A heartbeat must not count as a second state read."
+$twoReads = Submit-BeacnProviderSnapshot -Coordinator $confirmationCoordinator -Snapshot (New-ProviderSnapshot -Worker "confirmation-worker" -Sequence 4 -StateRevision 3 -States $baseStates)
+Assert-Isolation $twoReads.AdapterResult.HasActionAuthority "A second real state read must complete confirmation."
+$authoritativeBeforeStale = $confirmationCoordinator.LastAuthoritativeUtc
+$staleNow = [DateTime]::UtcNow
+$stale = Submit-BeacnProviderSnapshot -Coordinator $confirmationCoordinator -Snapshot (New-ProviderSnapshot -Worker "confirmation-worker" -Sequence 5 -StateRevision 4 -States $baseStates -At $staleNow -StateAt $staleNow.AddSeconds(-30)) -Now $staleNow
+Assert-Isolation ($stale.Rejected -and $confirmationCoordinator.LastAuthoritativeUtc -eq $authoritativeBeforeStale) "A stale state observation must not refresh or mutate authority."
+
 $movedStates = @(
     New-IsolationRawFader -Order 0 -Name "Mic" -Offset 120
     New-IsolationRawFader -Order 1 -Name "System" -Offset 120
@@ -66,6 +89,8 @@ Assert-Isolation (-not $moved.AdapterResult.LayoutInvalidated) "Moving the windo
 
 $restarted = Submit-BeacnProviderSnapshot -Coordinator $coordinator -Snapshot (New-ProviderSnapshot -Worker "worker-b" -Sequence 1 -States $movedStates)
 Assert-Isolation ($restarted.Accepted -and $restarted.WorkerGeneration -eq 2) "A replacement worker must start a new ordered generation."
+$retiredWorker = Submit-BeacnProviderSnapshot -Coordinator $coordinator -Snapshot (New-ProviderSnapshot -Worker "worker-a" -Sequence 3 -States $movedStates)
+Assert-Isolation ($retiredWorker.Rejected -and $retiredWorker.Reason -eq "retired worker identity") "A retired worker must not become authoritative again."
 $authoritativeBeforeEmpty = $coordinator.LastAuthoritativeUtc
 $empty = Submit-BeacnProviderSnapshot -Coordinator $coordinator -Snapshot (New-ProviderSnapshot -Worker "worker-b" -Sequence 2 -States @())
 Assert-Isolation ($empty.Accepted -and -not $empty.Publishable) "A transient empty provider snapshot must not replace the last authoritative state."
@@ -129,6 +154,8 @@ try {
     Assert-Isolation ([bool]$workerSnapshot.AccessibilityRuntimeIntegrityVerified) "The worker must publish a verified accessibility runtime identity."
     Assert-Isolation ($null -ne $workerSnapshot.PSObject.Properties["ScanInProgress"]) "The worker heartbeat must expose non-blocking scan activity."
     Assert-Isolation ($null -ne $workerSnapshot.PSObject.Properties["ScanInProgressMilliseconds"]) "The worker heartbeat must expose slow-scan recovery timing."
+    Assert-Isolation ($null -ne $workerSnapshot.PSObject.Properties["StateRevision"]) "Worker liveness and mixer-state revisions must be independent."
+    Assert-Isolation ($null -ne $workerSnapshot.PSObject.Properties["StateCapturedAtUtc"]) "The worker must preserve the real mixer-state observation time."
     Assert-Isolation (Send-BeacnAccessibilityCommand -Client $client -Type GeometryRefresh) "The authenticated command channel must accept geometry refreshes."
     $originalWorkerId = [string]$workerSnapshot.WorkerInstanceId
     $originalRestartCount = [long]$client.RestartCount

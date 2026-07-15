@@ -1,49 +1,56 @@
 # Mute Cue release checklist
 
-## Automated gate
+## Source and version
 
-- Run `Overlay\Build-MuteCueRelease.ps1 -RequireSigning -SigningCertificateThumbprint <thumbprint> -TimestampServer <CA HTTPS timestamp URL>`; do not assemble public release archives by hand.
-- Run `Overlay\Test-MuteCueSigningReadiness.ps1` first and require at least 30 days of remaining certificate validity.
-- Run `Overlay\Tests\Run-All.ps1` in Windows PowerShell 5.1.
-- Confirm the accessibility assembly reports the release version, contract 1, matching source hash, and a valid SHA-256 digest.
-- Confirm the isolated precompiled-runtime startup gate remains below its 750 ms P95 budget.
-- Confirm the simulated 4/7/8/13-fader, lock, page, reorder, and mixed-coordinate production matrix passes.
-- Confirm the deterministic locked-reader and concurrent snapshot IPC tests pass without worker termination, malformed JSON, or leftover temporary files.
-- Run `Overlay\Invoke-MuteCueHardwareAcceptance.ps1 -DiscoveryOnly` and keep cold authoritative discovery below 30 seconds.
-- Confirm every release-manifest file exists and no settings, credentials, logs, or packet captures are packaged.
-- Install twice into a clean per-user location and verify atomic version switching and rollback retention.
-- Confirm the release builder's exact-archive smoke installation passes; do not publish a zip that was not the tested artifact.
-- Uninstall and verify user data is preserved by default.
+- Start from a clean commit already merged into `main`.
+- Keep `Overlay/MuteCue.ReleaseManifest.json`, project version, file version, assembly version, tag, installer name, and release title aligned.
+- Use a new immutable version; never replace assets on an existing release.
+- Confirm the native payload manifest contains only `MuteCue.exe` and `MuteCue.DiscordPublicClient.json`.
 
-## Clean-machine matrix
+## Automated verification
 
-- Windows 10 and Windows 11 with a standard user account.
-- Display scaling at 100%, 125%, 150%, and 200%.
-- Single-monitor and mixed-DPI multi-monitor layouts, including negative coordinates.
-- Supported BEACN versions and the structural fallback warning on an unknown version.
-- Four, seven, eight, and thirteen faders; add, remove, rename, reorder, lock, and page transitions.
-- BEACN moved, minimized, restarted, upgraded, and running at a different privilege level.
-- Mix Create disconnect/reconnect, sleep/resume, USBPcap present, absent, and unavailable to the current user.
-- Rapid alternating All/Audience presses and desktop-app changes while the hardware page moves.
-- Configure a non-F24 BEACN Knob Mute shortcut for a non-Mic fader and verify Mute Cue targets that fader's Mute All row without any separate Mute Cue binding. Change the assignment while Mute Cue is running, then repeat once while the BEACN window is settling after a move.
-- From a fresh launch with an unknown hardware page, press an unlocked non-Mic knob and verify the overlay responds without a multi-row seconds-long stall. Confirm that zero or multiple output deltas still fall back safely and never guess a page.
-- Verify a configured shortcut previews within one 50 ms UI tick while fresh/Ready, then converges to two matching authoritative reads; stale or synchronizing state must not preview.
-- Run `Overlay\Run Mute Cue Hardware Acceptance.cmd` in Full scope and retain the generated acceptance JSON with the release record.
+- Run the Stable native suite.
+- Run the Dev native suite with `--expect-dev`.
+- Run `Overlay/Tests/Run-All.ps1` for retained compatibility coverage.
+- Build the self-contained Stable installer with `Overlay/Build-MuteCueExeRelease.ps1`.
+- Confirm the published and installed payload has no `Runtime` directory and no `.ps1` files.
+- Confirm the exact installed `MuteCue.exe` remains running and has no PowerShell child process.
+- Confirm the installer checksum matches the exact installer asset.
 
-## Distribution gate
+## Hardware acceptance
 
-- Build the versioned release directory and zip from `Overlay\MuteCue.ReleaseManifest.json` with the release script.
-- Verify `MuteCue.ReleaseFiles.json` and the external `.sha256` file against the exact downloadable archive.
-- Sign the installer/launcher artifacts with the release certificate.
-- Confirm `MuteCue.ReleaseFiles.json` reports `signed: true` and the intended certificate thumbprint.
-- Publish checksums and release notes with the verified BEACN compatibility range.
-- Keep the previous signed release available for rollback.
-- Run the clean-machine smoke test from the exact downloadable artifact, not the source workspace.
+- Discover every expected BEACN fader with independent All and Audience authority.
+- Verify desktop BEACN clicks, the configured Knob Mute hotkey, and physical knob mute/unmute.
+- Verify locked faders, an unlocked page, page changes, final-page overlap, and layout recalibration.
+- Verify USBPcap present, absent, reconnecting, and unavailable to the current user.
+- Verify BEACN moved, minimized, restarted, and running on mixed-DPI monitors.
+- Verify Discord connect, cancel, mute, deafen, token refresh, disconnect, forget authorization, and restart.
+- Verify the transparent overlay at supported sizes and opacity values.
 
-## Discord public-client gate
+## Clean-machine acceptance
 
-- Create one Mute Cue Discord application under the Mute Cue Developer Team; do not ask customers for an application ID, redirect URI, or client secret.
-- Enable Discord Public Client and register `http://127.0.0.1:47891/mute-cue/` before building the release.
-- Build with `-DiscordApplicationId <Mute Cue application ID>` and confirm the source placeholder was not shipped.
-- Obtain Discord RPC approval for the released scope and keep the review demo, privacy policy, and support contact current.
-- Verify Connect, cancel, reconnect, token refresh, Disconnect, Forget authorization, revoked consent, Discord restart, and sleep/resume on a clean Windows account.
+- Windows 10 and Windows 11 x64 using a standard user account with administrator approval available for install, update, and uninstall.
+- Install, launch, update, and uninstall the exact generated installer.
+- Confirm Stable installs to `C:\Program Files\Mute Cue` and continues to run without elevation.
+- Confirm the first machine-wide update removes the obsolete `%LOCALAPPDATA%\Programs\MuteCue` application directory and per-user uninstall entry.
+- Confirm settings and authorization survive an update and uninstall preserves user data by default.
+- Confirm no .NET or PowerShell installation is required by the application.
+- Confirm startup registration, start-in-tray behavior, close-to-tray behavior, tray Exit, and immediate reopening after a full exit.
+- Confirm the icon-only Mute Cue logo appears in both the taskbar and system tray.
+- Confirm Windows unsigned-publisher messaging is accurately disclosed.
+
+## GitHub promotion
+
+- Push the reviewed branch and merge it into `main` only after Windows verification succeeds.
+- Create the matching `v<version>` tag from the merged `main` commit.
+- Confirm the publish workflow succeeds and produces one installer plus one `.sha256` asset.
+- Download both assets from GitHub and verify the checksum locally.
+- Install and test the exact downloaded artifact before marking it as the primary download.
+- Keep the previous release available for rollback.
+
+## Discord public client
+
+- Keep the protected GitHub `production` environment configured with `MUTE_CUE_DISCORD_APPLICATION_ID`.
+- Confirm the Discord application remains a Public Client with `http://127.0.0.1:47891/mute-cue/` registered.
+- Never package a Discord client secret or local development override.
+- Keep the privacy policy, support route, and Discord approval material current.

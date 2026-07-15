@@ -243,17 +243,31 @@ function New-BeacnPublishedFaderState {
         [Parameter(Mandatory)][string]$StableKey
     )
 
+    # A newly observed transition needs a second, distinct fader observation
+    # before it can replace the committed state.  Keep publishing that last
+    # committed state while confirmation is pending.  The adapter result still
+    # drops HasActionAuthority/sets NeedsConfirmation, so callers cannot use it
+    # as fresh authority, but the renderer has a stable base for a click-owned
+    # optimistic state instead of flashing through an artificial "unknown" frame.
+    # A genuinely unreadable row still fails closed because DirectActionStateKnown
+    # is false in that case.
+    $publishActionState = [bool]$Tracker.Known -and $DirectActionStateKnown
     [pscustomobject]@{
         Order = [int]$RawState.Order
         StableKey = $StableKey
         Name = [string]$RawState.Name
         IsLocked = [bool]$RawState.IsLocked
-        PersonalMuted = ([bool]$Tracker.Known -and [bool]$Tracker.PersonalMuted)
-        AudienceMuted = ([bool]$Tracker.Known -and [bool]$Tracker.AudienceMuted)
-        Mode = if ([bool]$Tracker.Known) { [string]$Tracker.Mode } else { $null }
-        AllActive = ([bool]$Tracker.Known -and [bool]$Tracker.AllActive)
-        AudienceActive = ([bool]$Tracker.Known -and [bool]$Tracker.AudienceActive)
-        ActionStateKnown = ([bool]$Tracker.Known -and $DirectActionStateKnown)
+        PersonalMuted = ($publishActionState -and [bool]$Tracker.PersonalMuted)
+        AudienceMuted = ($publishActionState -and [bool]$Tracker.AudienceMuted)
+        Mode = if ($publishActionState) { [string]$Tracker.Mode } else { $null }
+        AllActive = ($publishActionState -and [bool]$Tracker.AllActive)
+        AudienceActive = ($publishActionState -and [bool]$Tracker.AudienceActive)
+        ActionStateKnown = $publishActionState
+        ActionRevision = $(
+            $revisionProperty = $RawState.PSObject.Properties['ActionRevision']
+            if ($null -eq $revisionProperty) { 0L } else { [long]$revisionProperty.Value }
+        )
+        CommittedActionRevision = [long]$Tracker.LastCommittedObservationRevision
         HasAllActionBounds = [bool]$RawState.HasAllActionBounds
         AllActionLeft = [double]$RawState.AllActionLeft
         AllActionTop = [double]$RawState.AllActionTop
@@ -380,12 +394,15 @@ function Submit-BeacnAdapterSnapshot {
         }
         $tracker = $Adapter.Trackers[$key]
         $directKnown = [bool]$rawState.AllActionStateKnown -and [bool]$rawState.AudienceActionStateKnown
+        $actionRevisionProperty = $rawState.PSObject.Properties['ActionRevision']
+        $actionRevision = if ($null -eq $actionRevisionProperty) { 0L } else { [long]$actionRevisionProperty.Value }
         if ($directKnown) {
             $submission = Submit-BeacnDirectActionSnapshot `
                 -Tracker $tracker `
                 -AllActive ([bool]$rawState.AllActionActive) `
                 -AudienceActive ([bool]$rawState.AudienceActionActive) `
-                -RequiredConfirmations $RequiredConfirmations
+                -RequiredConfirmations $RequiredConfirmations `
+                -ObservationRevision $actionRevision
             if ([bool]$submission.Committed) {
                 $tracker.PersonalMuted = [bool]$rawState.PersonalMuted
                 $tracker.AudienceMuted = [bool]$rawState.AudienceMuted
@@ -427,6 +444,7 @@ function Submit-BeacnAdapterSnapshot {
 
     $hasActionAuthority = (
         $published.Count -gt 0 -and
+        -not $needsConfirmation -and
         $missingActionRows.Count -eq 0 -and
         @($published | Where-Object { -not [bool]$_.ActionStateKnown }).Count -eq 0
     )
@@ -442,4 +460,18 @@ function Submit-BeacnAdapterSnapshot {
         CompatibilityStatus = [string]$Adapter.CompatibilityStatus
         CompatibilityDetail = [string]$Adapter.CompatibilityDetail
     }
+}
+
+function Reset-BeacnAdapterPendingConfirmations {
+    param([Parameter(Mandatory)][object]$Adapter)
+
+    foreach ($tracker in @($Adapter.Trackers.Values)) {
+        $tracker.Pending = ""
+        $tracker.Confirmations = 0
+        $tracker.LastObservationRevision = 0L
+        $tracker.LastCommittedObservationRevision = 0L
+    }
+    $Adapter.PendingLayoutFingerprint = ""
+    $Adapter.PendingLayoutConfirmations = 0
+    $Adapter.NeedsConfirmation = $true
 }

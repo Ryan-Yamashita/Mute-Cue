@@ -187,3 +187,41 @@ function Save-MuteCueSettings {
     Write-MuteCueAtomicText -Path $Path -Content $json -BackupPath ($Path + ".bak")
     return $normalized
 }
+
+function Get-MuteCueFaderSelectionSignature {
+    param([AllowNull()][object]$Settings)
+
+    return @(
+        [string](Get-MuteCueSettingValue -Settings $Settings -Name "BeacnFaderNames" -Fallback "")
+        [string](Get-MuteCueSettingValue -Settings $Settings -Name "BeacnAudienceFaderNames" -Fallback "")
+        [string](Get-MuteCueSettingValue -Settings $Settings -Name "BeacnAllFaderNames" -Fallback "")
+        [string](Get-MuteCueSettingValue -Settings $Settings -Name "BeacnAudienceFaderKeys" -Fallback "")
+        [string](Get-MuteCueSettingValue -Settings $Settings -Name "BeacnAllFaderKeys" -Fallback "")
+        [int](Get-MuteCueSettingValue -Settings $Settings -Name "BeacnFaderSelectionFormat" -Fallback 1)
+    ) -join [char]0
+}
+
+function Copy-MuteCueFaderSelectionSettings {
+    param(
+        [Parameter(Mandatory)][object]$Source,
+        [Parameter(Mandatory)][object]$Destination
+    )
+
+    foreach ($name in @(
+        "BeacnFaderNames",
+        "BeacnAudienceFaderNames",
+        "BeacnAllFaderNames",
+        "BeacnAudienceFaderKeys",
+        "BeacnAllFaderKeys",
+        "BeacnFaderSelectionFormat"
+    )) {
+        $value = Get-MuteCueSettingValue -Settings $Source -Name $name -Fallback $null
+        if ($Destination -is [System.Collections.IDictionary]) {
+            $Destination[$name] = $value
+        } else {
+            $property = $Destination.PSObject.Properties[$name]
+            if ($null -ne $property) { $property.Value = $value }
+        }
+    }
+    return $Destination
+}

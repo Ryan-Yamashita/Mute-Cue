@@ -1,25 +1,26 @@
 # Privacy
 
-Mute Cue is a local Windows application. It does not include a Mute Cue server or analytics service.
+Mute Cue is a local Windows application. It has no Mute Cue server, analytics service, advertising SDK, or telemetry upload.
 
 ## What stays on the device
 
-- Overlay preferences and BEACN source selections
-- Local diagnostic and error logs
-- Optional Discord authorization data, only after the user chooses **Connect Discord**
+- Overlay preferences and selected BEACN sources
+- Optional Discord authorization after the user chooses **Connect Discord**
+- Local application state required for startup and window placement
 
-Discord authorization data is protected for the current Windows account using Windows DPAPI. Selecting **Forget authorization** removes Mute Cue’s saved local authorization.
+Discord authorization is protected for the current Windows account using Windows DPAPI. Choosing **Forget authorization** removes Mute Cue's saved authorization.
 
 ## What Mute Cue reads
 
-- Visible BEACN desktop-client state needed to render selected mute indicators
+- Visible BEACN desktop-client state required to render selected mute indicators
+- BEACN's local Knob Mute mapping file for configured gestures
+- Optional local Mix Create USB activity through USBPcap
 - Optional Discord self-mute and self-deafen state after consent
-- Optional local USB hardware activity when USBPcap integration is enabled
 
-Mute Cue does not read Discord messages, server lists, contacts, or voice audio. It does not transmit BEACN state, Discord state, or diagnostics to a Mute Cue service.
+Mute Cue does not read Discord messages, server lists, contacts, or voice audio. It does not transmit BEACN state, Discord state, credentials, or diagnostics to a Mute Cue service.
 
-## Sharing diagnostics
+## Sharing support information
 
-The **Copy BEACN diagnostics** command creates a privacy-safe support report. Review it before sharing and never share settings files, packet captures, Discord authorization data, certificates, or BEACN profile files.
+Never share settings files, Discord authorization files, packet captures, certificates, BEACN profiles, or files copied from local application-data directories. When reporting a problem, provide only product versions and reproduction steps unless a maintainer requests a specific privacy-safe value.
 
-This document describes the application as released from this repository and is not legal advice.
+This document describes the application released from this repository and is not legal advice.

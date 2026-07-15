@@ -16,6 +16,14 @@ try {
     Assert-DiscordPublicClient ([bool]$client.Available) "A valid embedded public client must be accepted."
     Assert-DiscordPublicClient ($client.ApplicationId -eq "123456789012345678") "The embedded application ID changed."
 
+    [IO.File]::WriteAllText($path, '{"schemaVersion":2,"applicationId":"123456789012345678","redirectUri":"http://127.0.0.1:47891/mute-cue/"}')
+    $unsupported = Get-MuteCueDiscordPublicClient -Path $path
+    Assert-DiscordPublicClient (-not [bool]$unsupported.Available) "An unsupported public-client schema must fail closed."
+
+    [IO.File]::WriteAllText($path, '{"schemaVersion":1,"applicationId":"123456789012345678","redirectUri":"http://127.0.0.1:9999/other/"}')
+    $wrongRedirect = Get-MuteCueDiscordPublicClient -Path $path
+    Assert-DiscordPublicClient (-not [bool]$wrongRedirect.Available) "A different loopback redirect must fail closed."
+
     [IO.File]::WriteAllText($path, '{"applicationId":"not-an-id","redirectUri":"https://example.com/callback"}')
     $invalid = Get-MuteCueDiscordPublicClient -Path $path
     Assert-DiscordPublicClient (-not [bool]$invalid.Available) "An invalid public client must fail closed."

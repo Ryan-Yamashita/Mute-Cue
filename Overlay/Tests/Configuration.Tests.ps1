@@ -28,6 +28,32 @@ $startupTrayEnabled = Normalize-MuteCueSettings -Settings ([pscustomobject]@{
 }) -Defaults $defaults
 Assert-Equal $startupTrayEnabled.StartInSystemTray $true "String startup-in-tray values must normalize"
 
+$runtimeSelections = Normalize-MuteCueSettings -Settings ([pscustomobject]@{
+    BeacnAllFaderNames = "Mic"
+    BeacnAudienceFaderNames = "Mic"
+    BeacnAllFaderKeys = "profile:0"
+    BeacnAudienceFaderKeys = "profile:0"
+    BeacnFaderSelectionFormat = 3
+}) -Defaults $defaults
+$externalSelections = Normalize-MuteCueSettings -Settings ([pscustomobject]@{
+    BeacnFaderNames = ""
+    BeacnAllFaderNames = ""
+    BeacnAudienceFaderNames = ""
+    BeacnAllFaderKeys = ""
+    BeacnAudienceFaderKeys = ""
+    BeacnFaderSelectionFormat = 2
+}) -Defaults $defaults
+$beforeSelectionSignature = Get-MuteCueFaderSelectionSignature -Settings $runtimeSelections
+[void](Copy-MuteCueFaderSelectionSettings -Source $externalSelections -Destination $runtimeSelections)
+if ((Get-MuteCueFaderSelectionSignature -Settings $runtimeSelections) -eq $beforeSelectionSignature) {
+    throw "An external fader selection update must change the runtime signature"
+}
+Assert-Equal $runtimeSelections.BeacnAllFaderNames "" "External All deselection must reach the runtime"
+Assert-Equal $runtimeSelections.BeacnAudienceFaderNames "" "External Audience deselection must reach the runtime"
+Assert-Equal $runtimeSelections.BeacnAllFaderKeys "" "External All deselection must clear stable keys"
+Assert-Equal $runtimeSelections.BeacnAudienceFaderKeys "" "External Audience deselection must clear stable keys"
+Assert-Equal $runtimeSelections.BeacnFaderSelectionFormat 2 "External name selections must remain authoritative"
+
 $legacy = Normalize-MuteCueSettings -Settings ([pscustomobject]@{
     BeacnFaderNames = "Mic"
     BeacnMuteAllDetect = $true

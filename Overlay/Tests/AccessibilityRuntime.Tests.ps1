@@ -14,7 +14,7 @@ $sourceText = $sourceMatch.Groups[1].Value
 
 $component = Get-MuteCueAccessibilityComponentInfo -OverlayDirectory $overlayDirectory -SourceText $sourceText
 Assert-AccessibilityRuntime ($component.IsValid -and $component.IntegrityVerified -and $component.SourceVerified) "The release accessibility component must pass all validation checks."
-Assert-AccessibilityRuntime ($component.AssemblyVersion -eq "0.5.0.0" -and $component.ContractVersion -eq 1) "The accessibility component identity is unexpected."
+Assert-AccessibilityRuntime ($component.ContractVersion -eq 1 -and -not [string]::IsNullOrWhiteSpace([string]$component.AssemblyVersion)) "The accessibility component identity is unexpected."
 
 $temporaryRoot = Join-Path ([IO.Path]::GetTempPath()) ("MuteCue.Accessibility.Tests.{0}" -f [Guid]::NewGuid().ToString("N"))
 try {

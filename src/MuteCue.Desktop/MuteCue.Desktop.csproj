@@ -7,14 +7,29 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AssemblyName>MuteCue</AssemblyName>
     <RootNamespace>MuteCue.Desktop</RootNamespace>
-    <Version>0.6.0-preview.1</Version>
+    <MuteCueChannel Condition="'$(MuteCueChannel)' == ''">Stable</MuteCueChannel>
+    <Version>0.6.0</Version>
     <FileVersion>0.6.0.0</FileVersion>
     <AssemblyVersion>0.6.0.0</AssemblyVersion>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(MuteCueChannel)' == 'Dev'">
+    <AssemblyName>MuteCue-Dev</AssemblyName>
+    <Product>Mute Cue Dev</Product>
+    <Title>Mute Cue Dev</Title>
+    <Description>Local development build of Mute Cue</Description>
+    <DefineConstants>$(DefineConstants);MUTECUE_DEVELOPMENT</DefineConstants>
   </PropertyGroup>
   <ItemGroup>
     <Resource Include="..\..\Overlay\beacn-logo.png" Link="Assets\beacn-logo.png" />
     <Resource Include="..\..\Overlay\discord-logo.png" Link="Assets\discord-logo.png" />
     <Resource Include="..\..\Overlay\mute-cue-logo.png" Link="Assets\mute-cue-logo.png" />
     <Resource Include="..\..\Overlay\mute-cue-logo-transparent.png" Link="Assets\mute-cue-logo-transparent.png" />
+    <Resource Include="..\..\Overlay\mute-cue-tray.png" Link="Assets\mute-cue-tray.png" />
+    <Content Include="..\..\Overlay\MuteCue.DiscordPublicClient.json" Link="MuteCue.DiscordPublicClient.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
+  <Target Name="ValidateMuteCueChannel" BeforeTargets="PrepareForBuild">
+    <Error Condition="'$(MuteCueChannel)' != 'Stable' and '$(MuteCueChannel)' != 'Dev'" Text="MuteCueChannel must be either Stable or Dev." />
+  </Target>
 </Project>

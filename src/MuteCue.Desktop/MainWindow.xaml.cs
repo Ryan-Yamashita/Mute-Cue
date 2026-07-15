@@ -1,29 +1,50 @@
 using System;
 using System.ComponentModel;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Threading;
+using Drawing = System.Drawing;
 using Forms = System.Windows.Forms;
 using MuteCue.Desktop.Services;
+using MuteCue.Desktop.NativeRuntime;
 
 namespace MuteCue.Desktop;
 
 public partial class MainWindow : Window
 {
     private readonly NativeSettingsDocument _settings;
+    private readonly NativeMuteCueRuntime _runtime;
+    private readonly Drawing.Icon _trayIconImage;
     private readonly Forms.NotifyIcon _trayIcon;
     private readonly List<FaderSelectionRow> _faderRows = [];
+    private readonly DispatcherTimer _faderSaveTimer;
     private bool _isLoading = true;
     private bool _allowClose;
+    private bool _shutdownRequested;
+    private bool _shutdownPrepared;
 
-    public MainWindow(NativeSettingsDocument settings, bool startInTray)
+    public MainWindow(NativeSettingsDocument settings, NativeMuteCueRuntime runtime, bool startInTray)
     {
         InitializeComponent();
+        Title = $"{AppChannel.ProductName} Settings";
+        DevBadge.Visibility = AppChannel.IsDevelopment ? Visibility.Visible : Visibility.Collapsed;
         _settings = settings;
-        _trayIcon = CreateTrayIcon();
+        _runtime = runtime;
+        _runtime.DiscordStatusChanged += Runtime_OnDiscordStatusChanged;
+        _runtime.BeacnStatusChanged += Runtime_OnBeacnStatusChanged;
+        _trayIconImage = LoadApplicationIcon();
+        _trayIcon = CreateTrayIcon(_trayIconImage);
+        _faderSaveTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(120) };
+        _faderSaveTimer.Tick += (_, _) =>
+        {
+            _faderSaveTimer.Stop();
+            SaveFaderSelections();
+        };
         LoadSettings();
         _isLoading = false;
-        StatusText.Text = "Native preview ready. The stable app remains active until feature parity is verified.";
+        StatusText.Text = $"{AppChannel.ProductName} is monitoring BEACN and Discord locally.";
         SelectTab("Discord");
 
         if (startInTray)
@@ -32,23 +53,38 @@ public partial class MainWindow : Window
         }
     }
 
-    private Forms.NotifyIcon CreateTrayIcon()
+    private Forms.NotifyIcon CreateTrayIcon(Drawing.Icon applicationIcon)
     {
         var icon = new Forms.NotifyIcon
         {
-            Icon = System.Drawing.SystemIcons.Application,
-            Text = "Mute Cue Native Preview",
+            Icon = applicationIcon,
+            Text = AppChannel.ProductName,
             Visible = true,
         };
         icon.DoubleClick += (_, _) => RestoreFromTray();
         icon.ContextMenuStrip = new Forms.ContextMenuStrip();
-        icon.ContextMenuStrip.Items.Add("Show Mute Cue", null, (_, _) => RestoreFromTray());
-        icon.ContextMenuStrip.Items.Add("Exit", null, (_, _) =>
-        {
-            _allowClose = true;
-            Close();
-        });
+        icon.ContextMenuStrip.Items.Add($"Show {AppChannel.ProductName}", null, (_, _) => RestoreFromTray());
+        icon.ContextMenuStrip.Items.Add("Exit", null, (_, _) => ExitApplication());
         return icon;
+    }
+
+    private static Drawing.Icon LoadApplicationIcon()
+    {
+        var resource = System.Windows.Application.GetResourceStream(
+            new Uri("pack://application:,,,/Assets/mute-cue-tray.png", UriKind.Absolute))
+            ?? throw new InvalidOperationException("The Mute Cue application icon is missing.");
+        using var stream = resource.Stream;
+        using var bitmap = new Drawing.Bitmap(stream);
+        var nativeIcon = bitmap.GetHicon();
+        try
+        {
+            using var borrowedIcon = Drawing.Icon.FromHandle(nativeIcon);
+            return (Drawing.Icon)borrowedIcon.Clone();
+        }
+        finally
+        {
+            DestroyIcon(nativeIcon);
+        }
     }
 
     private void LoadSettings()
@@ -58,9 +94,16 @@ public partial class MainWindow : Window
         OverlaySizeValue.Text = $"{OverlaySize.Value:0}px";
         OverlayOpacityValue.Text = $"{OverlayOpacity.Value:P0}";
         ClickThrough.IsChecked = _settings.GetBoolean("ClickThrough", false);
+        CloseToTray.IsChecked = _settings.GetBoolean("CloseToSystemTray", false);
         RunOnStartup.IsChecked = StartupRegistrationService.IsRegistered();
-        StartInTray.IsChecked = _settings.GetBoolean("StartInSystemTray", false);
-        StartInTray.IsEnabled = RunOnStartup.IsChecked == true;
+        RunOnStartup.IsEnabled = StartupRegistrationService.IsSupported;
+        RunOnStartupLabel.Text = StartupRegistrationService.IsSupported ? "Run on startup" : "Run on startup (Stable only)";
+        StartInTray.IsChecked = StartupRegistrationService.IsSupported && _settings.GetBoolean("StartInSystemTray", false);
+        StartInTray.IsEnabled = StartupRegistrationService.IsSupported && RunOnStartup.IsChecked == true;
+        DiscordMicDetect.IsChecked = _settings.GetBoolean("DiscordMicDetect", true);
+        DiscordDeafenDetect.IsChecked = _settings.GetBoolean("DiscordDeafenDetect", true);
+        DiscordStatus.Text = _runtime.DiscordConnectionStatus;
+        BeacnStatus.Text = _runtime.BeacnConnectionStatus;
 
         LoadFaderSelections();
     }
@@ -97,9 +140,24 @@ public partial class MainWindow : Window
         SaveSettings();
     }
 
-    private void Save_OnClick(object sender, RoutedEventArgs e) => SaveSettings();
+    private void Save_OnClick(object sender, RoutedEventArgs e)
+    {
+        _faderSaveTimer.Stop();
+        SaveFaderSelections();
+        SaveSettings();
+    }
 
-    private void Close_OnClick(object sender, RoutedEventArgs e) => HideToTray();
+    private void Close_OnClick(object sender, RoutedEventArgs e) => Close();
+
+    private void ConnectDiscord_OnClick(object sender, RoutedEventArgs e) => _runtime.ConnectDiscord();
+
+    private void DisconnectDiscord_OnClick(object sender, RoutedEventArgs e) => _runtime.DisconnectDiscord();
+
+    private void ForgetDiscord_OnClick(object sender, RoutedEventArgs e) => _runtime.ForgetDiscordAuthorization();
+
+    private void PreviewOverlay_OnClick(object sender, RoutedEventArgs e) => _runtime.PreviewOverlay(centerOnPrimaryScreen: false);
+
+    private void CenterOverlay_OnClick(object sender, RoutedEventArgs e) => _runtime.PreviewOverlay(centerOnPrimaryScreen: true);
 
     private void DiscordTab_OnClick(object sender, RoutedEventArgs e) => SelectTab("Discord");
 
@@ -136,28 +194,39 @@ public partial class MainWindow : Window
         _settings.SetInteger("Size", (int)Math.Round(OverlaySize.Value));
         _settings.SetDouble("Opacity", OverlayOpacity.Value);
         _settings.SetBoolean("ClickThrough", ClickThrough.IsChecked == true);
+        _settings.SetBoolean("CloseToSystemTray", CloseToTray.IsChecked == true);
+        _settings.SetBoolean("DiscordMicDetect", DiscordMicDetect.IsChecked == true);
+        _settings.SetBoolean("DiscordDeafenDetect", DiscordDeafenDetect.IsChecked == true);
         _settings.SetBoolean("StartInSystemTray", StartInTray.IsChecked == true && RunOnStartup.IsChecked == true);
         _settings.Save();
-        StatusText.Text = "Settings saved using the shared Mute Cue settings file.";
+        _runtime.ApplySettings();
+        StatusText.Text = "Settings saved.";
     }
 
     private void LoadFaderSelections()
     {
         var allSources = FaderSourceParser.Parse(_settings.GetString("BeacnAllFaderNames", ""));
         var audienceSources = FaderSourceParser.Parse(_settings.GetString("BeacnAudienceFaderNames", ""));
-        var sources = FaderSourceParser.Merge(
+        var staleAllKeys = FaderSourceParser.Parse(_settings.GetString("BeacnAllFaderKeys", ""));
+        var staleAudienceKeys = FaderSourceParser.Parse(_settings.GetString("BeacnAudienceFaderKeys", ""));
+        var selectionFormat = _settings.GetInteger("BeacnFaderSelectionFormat", 1, 1, 3);
+        var sources = FaderSourceParser.MergeWithDefaults(
             _settings.GetString("BeacnFaderNames", ""),
             _settings.GetString("BeacnAllFaderNames", ""),
             _settings.GetString("BeacnAudienceFaderNames", ""));
 
-        if (sources.Count == 0)
-        {
-            sources = new[] { "Mic", "System", "Link In", "Game", "Link 2 In", "Chat", "Hardware" };
-        }
-
         foreach (var source in sources)
         {
             AddFaderSelectionRow(source, allSources.Contains(source, StringComparer.OrdinalIgnoreCase), audienceSources.Contains(source, StringComparer.OrdinalIgnoreCase));
+        }
+
+        if (selectionFormat >= 3 && allSources.Count == 0 && audienceSources.Count == 0 &&
+            (staleAllKeys.Count > 0 || staleAudienceKeys.Count > 0))
+        {
+            // Repair the mismatch produced by the first native preview: it cleared
+            // visible names but accidentally retained hidden stable-key selections.
+            FaderSelectionSettings.Apply(_settings, [], []);
+            _settings.Save();
         }
     }
 
@@ -202,48 +271,100 @@ public partial class MainWindow : Window
             return;
         }
 
-        SaveFaderSelections();
+        _faderSaveTimer.Stop();
+        _faderSaveTimer.Start();
     }
 
     private void SaveFaderSelections()
     {
         var allSources = _faderRows.Where(row => row.AllToggle.IsChecked == true).Select(row => row.Source).ToArray();
         var audienceSources = _faderRows.Where(row => row.AudienceToggle.IsChecked == true).Select(row => row.Source).ToArray();
-        var selectedSources = _faderRows.Where(row => row.AllToggle.IsChecked == true || row.AudienceToggle.IsChecked == true).Select(row => row.Source).ToArray();
-        _settings.SetString("BeacnAllFaderNames", string.Join(',', allSources));
-        _settings.SetString("BeacnAudienceFaderNames", string.Join(',', audienceSources));
-        _settings.SetString("BeacnFaderNames", string.Join(',', selectedSources));
-        _settings.SetInteger("BeacnFaderSelectionFormat", 3);
+        FaderSelectionSettings.Apply(_settings, allSources, audienceSources);
         _settings.Save();
         StatusText.Text = "BEACN fader selections saved.";
     }
 
     protected override void OnClosing(CancelEventArgs e)
     {
-        if (!_allowClose)
+        if (WindowCloseBehavior.ShouldHideToTray(
+            closeToSystemTray: CloseToTray.IsChecked == true,
+            explicitExitRequested: _allowClose))
         {
             e.Cancel = true;
             HideToTray();
             return;
         }
 
+        _allowClose = true;
+        PrepareForShutdown();
+        if (!_shutdownRequested)
+        {
+            _shutdownRequested = true;
+            Dispatcher.BeginInvoke(() => System.Windows.Application.Current.Shutdown());
+        }
+
+        base.OnClosing(e);
+    }
+
+    private void PrepareForShutdown()
+    {
+        if (_shutdownPrepared)
+        {
+            return;
+        }
+
+        _shutdownPrepared = true;
+        if (_faderSaveTimer.IsEnabled)
+        {
+            _faderSaveTimer.Stop();
+            SaveFaderSelections();
+        }
         _trayIcon.Visible = false;
         _trayIcon.Dispose();
-        base.OnClosing(e);
+        _trayIconImage.Dispose();
+        _runtime.DiscordStatusChanged -= Runtime_OnDiscordStatusChanged;
+        _runtime.BeacnStatusChanged -= Runtime_OnBeacnStatusChanged;
+        _runtime.SaveOverlayPosition();
+    }
+
+    internal void ExitApplication()
+    {
+        _allowClose = true;
+        _shutdownRequested = true;
+        System.Windows.Application.Current.Shutdown();
     }
 
     private void HideToTray()
     {
         Hide();
-        _trayIcon.ShowBalloonTip(1000, "Mute Cue", "Mute Cue is running in the system tray.", Forms.ToolTipIcon.Info);
+        _trayIcon.ShowBalloonTip(1000, AppChannel.ProductName, $"{AppChannel.ProductName} is running in the system tray.", Forms.ToolTipIcon.Info);
     }
 
     private void RestoreFromTray()
     {
-        Show();
+        if (!IsVisible)
+        {
+            Show();
+        }
         WindowState = WindowState.Normal;
         Activate();
     }
 
+    internal void RestoreFromExternalLaunch() => RestoreFromTray();
+
+    private void Runtime_OnDiscordStatusChanged(string status)
+    {
+        DiscordStatus.Text = status;
+    }
+
+    private void Runtime_OnBeacnStatusChanged(string status)
+    {
+        BeacnStatus.Text = status;
+    }
+
     private sealed record FaderSelectionRow(string Source, System.Windows.Controls.CheckBox AllToggle, System.Windows.Controls.CheckBox AudienceToggle);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool DestroyIcon(IntPtr handle);
 }

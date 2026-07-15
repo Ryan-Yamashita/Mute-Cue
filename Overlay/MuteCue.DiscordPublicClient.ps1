@@ -1,6 +1,7 @@
 function Get-MuteCueDiscordPublicClient {
     param([Parameter(Mandatory)][string]$Path)
 
+    $expectedRedirectUri = "http://127.0.0.1:47891/mute-cue/"
     $empty = [pscustomobject]@{
         Available = $false
         ApplicationId = ""
@@ -12,12 +13,12 @@ function Get-MuteCueDiscordPublicClient {
         $file = New-Object IO.FileInfo($Path)
         if ($file.Length -le 0 -or $file.Length -gt 64KB) { throw "The public-client configuration has an invalid size." }
         $configuration = [IO.File]::ReadAllText($Path) | ConvertFrom-Json
+        if ([int]$configuration.schemaVersion -ne 1) { throw "The Discord public-client schema is unsupported." }
         $applicationId = ([string]$configuration.applicationId).Trim()
         $redirectUri = ([string]$configuration.redirectUri).Trim()
         if ($applicationId -notmatch '^\d{17,22}$') { throw "The Discord application ID is missing or invalid." }
-        $uri = $null
-        if (-not [Uri]::TryCreate($redirectUri, [UriKind]::Absolute, [ref]$uri) -or $uri.Scheme -ne 'http' -or $uri.Host -ne '127.0.0.1') {
-            throw "The Discord redirect URI must be an http://127.0.0.1 loopback address."
+        if ($redirectUri -cne $expectedRedirectUri) {
+            throw "The Discord redirect URI does not match Mute Cue's registered loopback callback."
         }
         return [pscustomobject]@{
             Available = $true

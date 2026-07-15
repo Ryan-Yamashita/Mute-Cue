@@ -2,13 +2,13 @@
     "schemaVersion":  1,
     "component":  "Mute Cue Accessibility Runtime",
     "assemblyName":  "MuteCue.Accessibility",
-    "assemblyVersion":  "0.5.0.0",
+    "assemblyVersion":  "0.5.2.0",
     "contractVersion":  1,
-    "sha256":  "9066689b93b291643b54e9f8e8de6416d408f2511d4a07604bde7acb51bf8c74",
-    "sourceSha256":  "576a5241fcaf0640075581f32fa1c3d2cfb2ccd36abee4eb12128af516bb3b56",
+    "sha256":  "3f4b4b22b88081e0d65d314849a7643df211e8e3cf72c1506babe768f1cf484f",
+    "sourceSha256":  "923ef72e23d07de662b6e0cca33a55833c6fed8a62b75144575c8b3030dfbb3a",
     "authenticodeSigned":  false,
     "signerThumbprint":  "",
     "authenticodeTimestamped":  false,
     "timestampSignerThumbprint":  "",
-    "builtAtUtc":  "2026-07-15T00:48:20.2679939Z"
+    "builtAtUtc":  "2026-07-15T18:51:43.6485220Z"
 }
