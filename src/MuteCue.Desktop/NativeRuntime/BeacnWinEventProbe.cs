@@ -47,6 +47,7 @@ internal sealed class BeacnWinEventProbe : IDisposable
     private IntPtr _hook;
     private int _processId;
     private DateTime _lastAttemptUtc = DateTime.MinValue;
+    private DateTime _lastProcessCheckUtc = DateTime.MinValue;
     private bool _disposed;
 
     internal BeacnWinEventProbe()
@@ -62,9 +63,19 @@ internal sealed class BeacnWinEventProbe : IDisposable
             return false;
         }
 
-        if (_hook != IntPtr.Zero && IsBeacnProcessRunning(_processId))
+        if (_hook != IntPtr.Zero)
         {
-            return true;
+            // Avoid querying OS process handles on the fast overlay timer.
+            if ((DateTime.UtcNow - _lastProcessCheckUtc).TotalSeconds < 5)
+            {
+                return true;
+            }
+
+            _lastProcessCheckUtc = DateTime.UtcNow;
+            if (IsBeacnProcessRunning(_processId))
+            {
+                return true;
+            }
         }
 
         Stop();
@@ -99,6 +110,7 @@ internal sealed class BeacnWinEventProbe : IDisposable
                 {
                     _hook = handle;
                     _processId = process.Id;
+                    _lastProcessCheckUtc = DateTime.UtcNow;
                     BeacnTimingTrace.Record("win-hook", "", "BEACN process-scoped listener started");
                     return true;
                 }
