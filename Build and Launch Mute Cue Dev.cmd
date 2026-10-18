@@ -72,7 +72,8 @@ echo.
 if /i "%~1"=="--build-only" exit /b 0
 echo  Launching it now...
 echo.
-start "" "%DEV_EXE%"
+rem Forward optional Dev-only diagnostic flags to the launched executable.
+start "" "%DEV_EXE%" %*
 exit /b 0
 
 :build_failed
