@@ -1950,6 +1950,8 @@ namespace BeacnMuteOverlay {
         private static bool TryRefreshFaderAction(TrackedFader fader, int mask, out bool changed) {
             changed = false;
             bool succeeded = true;
+            bool observed = false;
+            bool passiveProbe = (mask & PassiveSubtreeOnlyRefreshMask) != 0 && !AllowsRenderedProbeForMask(mask);
 
             if ((mask & 1) != 0) {
                 bool wasKnown = fader.AllActionSeen;
@@ -1972,6 +1974,7 @@ namespace BeacnMuteOverlay {
                     out allMenuButtonSeen
                 );
                 if (allRead) {
+                    observed = true;
                     bool isActive = !allMenuButtonSeen;
                     fader.AllActionBounds = allBounds;
                     fader.AllActionRowBounds = allRowBounds;
@@ -1981,8 +1984,12 @@ namespace BeacnMuteOverlay {
                     fader.AllVerifiedUtc = DateTime.UtcNow;
                     if (wasKnown && wasActive != isActive) changed = true;
                 } else {
-                    fader.AllActionSeen = false;
-                    fader.AllVerifiedUtc = DateTime.UtcNow;
+                    // An occluded BEACN subtree may be temporarily unreadable.
+                    // Passive diagnostics retain the last authoritative result.
+                    if (!passiveProbe) {
+                        fader.AllActionSeen = false;
+                        fader.AllVerifiedUtc = DateTime.UtcNow;
+                    }
                     succeeded = false;
                 }
             }
@@ -2008,6 +2015,7 @@ namespace BeacnMuteOverlay {
                     out audienceMenuButtonSeen
                 );
                 if (audienceRead) {
+                    observed = true;
                     bool isActive = !audienceMenuButtonSeen;
                     fader.AudienceActionBounds = audienceBounds;
                     fader.AudienceActionRowBounds = audienceRowBounds;
@@ -2017,8 +2025,10 @@ namespace BeacnMuteOverlay {
                     fader.AudienceVerifiedUtc = DateTime.UtcNow;
                     if (wasKnown && wasActive != isActive) changed = true;
                 } else {
-                    fader.AudienceActionSeen = false;
-                    fader.AudienceVerifiedUtc = DateTime.UtcNow;
+                    if (!passiveProbe) {
+                        fader.AudienceActionSeen = false;
+                        fader.AudienceVerifiedUtc = DateTime.UtcNow;
+                    }
                     succeeded = false;
                 }
             }
@@ -2026,7 +2036,7 @@ namespace BeacnMuteOverlay {
             // A failed targeted read is also a real observation: it makes the row
             // explicitly unknown and must be published. The per-fader revision
             // prevents cache-only or unrelated reads from confirming this row.
-            if ((mask & 3) != 0) fader.ActionRevision = MarkStateObservation();
+            if ((mask & 3) != 0 && (!passiveProbe || observed)) fader.ActionRevision = MarkStateObservation();
             return succeeded;
         }
 
