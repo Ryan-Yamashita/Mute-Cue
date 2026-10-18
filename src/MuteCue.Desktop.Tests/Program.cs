@@ -35,6 +35,15 @@ try
     var developmentCompatibility = CompatibilityDiagnostics.FromArguments(compatibilityFlags, isDevelopment: true);
     Assert(developmentCompatibility.DisableGlobalHooks && developmentCompatibility.DisableUsbCapture && developmentCompatibility.DisableOverlay, "Development switches must independently disable hooks, USB capture, and overlay.");
     Assert(CompatibilityDiagnostics.FromArguments(["--dev-no-usb-capture"], isDevelopment: true) == new CompatibilityDiagnostics(false, true, false), "Disabling only USB capture must keep other components enabled.");
+    Assert(CompatibilityDiagnostics.FromArguments(["--dev-fast-beacn-fallback"], isDevelopment: true) == default,
+        "The fallback switch must have no effect unless Dev USB capture is also disabled.");
+    var usbFreeFallback = CompatibilityDiagnostics.FromArguments(
+        ["--dev-no-usb-capture", "--dev-fast-beacn-fallback"], isDevelopment: true);
+    Assert(usbFreeFallback.DisableUsbCapture && usbFreeFallback.EnableFastBeacnFallback,
+        "The explicit Dev USB-free fallback must leave capture disabled and activate bounded reconciliation.");
+    Assert(!CompatibilityDiagnostics.FromArguments(
+        ["--dev-no-usb-capture", "--dev-fast-beacn-fallback"], isDevelopment: false).EnableFastBeacnFallback,
+        "Stable must ignore the experimental USB-free polling fallback.");
     Assert(CompatibilityDiagnostics.FromArguments([], isDevelopment: true) == default, "Normal Dev behavior must remain unchanged.");
     Assert(developmentCompatibility.StatusDescription.Contains("global input hooks", StringComparison.Ordinal), "Diagnostic status must describe active limitations.");
     Assert(NativeMuteCueRuntime.VerifiedAllActionLabels.SequenceEqual(["Knob: Mute to All"]), "The native scanner must use BEACN's verified All action label.");
