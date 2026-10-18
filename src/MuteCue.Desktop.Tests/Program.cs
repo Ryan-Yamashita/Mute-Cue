@@ -44,6 +44,18 @@ try
     Assert(!CompatibilityDiagnostics.FromArguments(
         ["--dev-no-usb-capture", "--dev-fast-beacn-fallback"], isDevelopment: false).EnableFastBeacnFallback,
         "Stable must ignore the experimental USB-free polling fallback.");
+    var timingEnabled = CompatibilityDiagnostics.FromArguments(
+        ["--dev-no-usb-capture", "--dev-fast-beacn-fallback", "--dev-beacn-timing"],
+        isDevelopment: true);
+    Assert(timingEnabled.EnableBeacnTiming && timingEnabled.EnableFastBeacnFallback,
+        "The timing trace must be available only in the explicit Dev USB-free test.");
+    Assert(!CompatibilityDiagnostics.FromArguments(
+        ["--dev-beacn-timing"], isDevelopment: true).EnableBeacnTiming,
+        "The timing trace must not enable without the other two diagnostic flags.");
+    Assert(!CompatibilityDiagnostics.FromArguments(
+        ["--dev-no-usb-capture", "--dev-fast-beacn-fallback", "--dev-beacn-timing"],
+        isDevelopment: false).EnableBeacnTiming,
+        "Stable must never activate the timing trace.");
     Assert(CompatibilityDiagnostics.FromArguments([], isDevelopment: true) == default, "Normal Dev behavior must remain unchanged.");
     Assert(developmentCompatibility.StatusDescription.Contains("global input hooks", StringComparison.Ordinal), "Diagnostic status must describe active limitations.");
     Assert(Math.Abs(NativeMuteCueRuntime.CalculateUsbFreeFallbackIntervalMilliseconds(8, 10d) - 125d) < 0.01,
