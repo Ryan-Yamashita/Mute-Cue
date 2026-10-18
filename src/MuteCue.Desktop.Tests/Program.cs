@@ -46,6 +46,18 @@ try
         "Stable must ignore the experimental USB-free polling fallback.");
     Assert(CompatibilityDiagnostics.FromArguments([], isDevelopment: true) == default, "Normal Dev behavior must remain unchanged.");
     Assert(developmentCompatibility.StatusDescription.Contains("global input hooks", StringComparison.Ordinal), "Diagnostic status must describe active limitations.");
+    Assert(Math.Abs(NativeMuteCueRuntime.CalculateUsbFreeFallbackIntervalMilliseconds(8, 10d) - 125d) < 0.01,
+        "The USB-free sweep must scale its interval for eight selected sources.");
+    Assert(Math.Abs(NativeMuteCueRuntime.CalculateUsbFreeFallbackIntervalMilliseconds(1, 10d) - 250d) < 0.01,
+        "A single selected source must remain bounded rather than polling constantly.");
+    Assert(Math.Abs(NativeMuteCueRuntime.CalculateUsbFreeFallbackIntervalMilliseconds(8, 300d) - 500d) < 0.01,
+        "Slow UI Automation provider calls must throttle the fallback.");
+    Assert(!BeacnAppScanner.AllowsRenderedProbeForMask(3 | 32),
+        "Passive USB-free refreshes must not hit-test a foreground game's UI Automation tree.");
+    Assert(BeacnAppScanner.AllowsRenderedProbeForMask(15 | 32),
+        "Explicit hotkey/click requests must retain their existing rendered-probe precedence.");
+    Assert(BeacnAppScanner.AllowsRenderedProbeForMask(15),
+        "Regular BEACN requests must preserve their original rendered-probe behavior.");
     Assert(NativeMuteCueRuntime.VerifiedAllActionLabels.SequenceEqual(["Knob: Mute to All"]), "The native scanner must use BEACN's verified All action label.");
     Assert(NativeMuteCueRuntime.VerifiedAudienceActionLabels.SequenceEqual(["Mute to Audience"]), "The native scanner must use BEACN's verified Audience action label.");
 
