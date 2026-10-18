@@ -11,7 +11,8 @@ internal readonly record struct CompatibilityDiagnostics(
     bool DisableGlobalHooks,
     bool DisableUsbCapture,
     bool DisableOverlay,
-    bool EnableFastBeacnFallback = false)
+    bool EnableFastBeacnFallback = false,
+    bool EnableBeacnTiming = false)
 {
     internal static CompatibilityDiagnostics FromArguments(IEnumerable<string> arguments, bool isDevelopment)
     {
@@ -26,7 +27,10 @@ internal readonly record struct CompatibilityDiagnostics(
             DisableUsbCapture: switches.Contains("--dev-no-usb-capture"),
             DisableOverlay: switches.Contains("--dev-no-overlay"),
             EnableFastBeacnFallback: switches.Contains("--dev-no-usb-capture") &&
-                switches.Contains("--dev-fast-beacn-fallback"));
+                switches.Contains("--dev-fast-beacn-fallback"),
+            EnableBeacnTiming: switches.Contains("--dev-no-usb-capture") &&
+                switches.Contains("--dev-fast-beacn-fallback") &&
+                switches.Contains("--dev-beacn-timing"));
     }
 
     internal string StatusDescription
@@ -38,6 +42,7 @@ internal readonly record struct CompatibilityDiagnostics(
             if (DisableUsbCapture) disabled.Add("USB capture");
             if (DisableOverlay) disabled.Add("overlay rendering");
             if (EnableFastBeacnFallback) disabled.Add("USB-free BEACN fallback enabled");
+            if (EnableBeacnTiming) disabled.Add("BEACN timing trace enabled");
 
             return disabled.Count == 0
                 ? string.Empty
