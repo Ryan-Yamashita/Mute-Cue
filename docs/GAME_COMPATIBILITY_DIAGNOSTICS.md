@@ -72,6 +72,22 @@ The output records UI Automation event notifications, when the polling request w
 
 This diagnostic trace is not a fix and does not promise compatibility with Javelin. No Apex testing is needed to characterize the four-second BEACN delay.
 
+### Device-interface investigation after the mic-only control
+
+The user confirmed that reducing the Dev fallback to only the Mic fader makes the indicator much faster. With seven faders, the BEACN/JUCE UI Automation subtree read takes approximately 325–436 ms per fader and Mute Cue checks the selected faders serially. Repeatedly increasing polling cadence is unlikely to solve all-seven-fader responsiveness.
+
+Before choosing a new event-driven implementation, verify what **actual** device interfaces the Mix Create exposes. With BEACN running and Mix Create connected, this script only reads Windows Plug and Play inventory:
+
+```powershell
+Set-Location "$HOME\Mute-Cue-Javelin-Test"
+git pull --ff-only
+& ".\diagnostics\Inspect-BeacnDeviceInterfaces.ps1"
+```
+
+It prints any named BEACN devices and related Windows HID devices for matching USB vendor/product IDs; it does not open a device, intercept USB traffic, install or change drivers, or alter any anti-cheat service. Do not share raw output if device instance IDs include identifiers you'd prefer to keep private.
+
+**Interpretation:** Finding a related HID interface is necessary but not sufficient for Windows Raw Input: we would still have to verify that its HID collection emits the relevant knob/button input reports and is accessible concurrently with the BEACN app. If no suitable HID path exists, use an explicitly supported BEACN application event/API if the vendor provides one, or reconsider the latency requirements. Do not claim generic USB interrupt transfers can be read through Raw Input.
+
 ## Controlled test sequence
 
 1. Confirm **Apex launches normally with Mute Cue fully exited**, not merely its indicator hidden. In Event Viewer, check **Windows Logs → Application** for `EA Javelin Anticheat` around the crash, including **Event ID** and **ExitType**. Check **Windows Logs → System** for a nearby Service Control Manager event. Preserve the exact **General** message and timestamp, and redact any personally identifying paths or session tokens before sharing.
