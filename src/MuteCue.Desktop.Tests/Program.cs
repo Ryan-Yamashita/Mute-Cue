@@ -24,6 +24,19 @@ try
     Assert(!WindowCloseBehavior.ShouldHideToTray(closeToSystemTray: true, explicitExitRequested: true), "Tray Exit must always bypass close-to-tray behavior.");
     Assert(AppPaths.DataDirectory.EndsWith(AppChannel.DataDirectoryName, StringComparison.OrdinalIgnoreCase), "Application paths must use the compiled channel identity.");
     Assert(AppPaths.DiscordAuthorizationPath.StartsWith(AppPaths.DataDirectory, StringComparison.OrdinalIgnoreCase), "Discord authorization must remain inside the current channel's data directory.");
+    var compatibilityFlags = new[]
+    {
+        "--dev-no-global-hooks",
+        "--DEV-NO-USB-CAPTURE",
+        "--dev-no-overlay",
+    };
+    var stableCompatibility = CompatibilityDiagnostics.FromArguments(compatibilityFlags, isDevelopment: false);
+    Assert(stableCompatibility == default, "Stable must ignore all development compatibility switches.");
+    var developmentCompatibility = CompatibilityDiagnostics.FromArguments(compatibilityFlags, isDevelopment: true);
+    Assert(developmentCompatibility.DisableGlobalHooks && developmentCompatibility.DisableUsbCapture && developmentCompatibility.DisableOverlay, "Development switches must independently disable hooks, USB capture, and overlay.");
+    Assert(CompatibilityDiagnostics.FromArguments(["--dev-no-usb-capture"], isDevelopment: true) == new CompatibilityDiagnostics(false, true, false), "Disabling only USB capture must keep other components enabled.");
+    Assert(CompatibilityDiagnostics.FromArguments([], isDevelopment: true) == default, "Normal Dev behavior must remain unchanged.");
+    Assert(developmentCompatibility.StatusDescription.Contains("global input hooks", StringComparison.Ordinal), "Diagnostic status must describe active limitations.");
     Assert(NativeMuteCueRuntime.VerifiedAllActionLabels.SequenceEqual(["Knob: Mute to All"]), "The native scanner must use BEACN's verified All action label.");
     Assert(NativeMuteCueRuntime.VerifiedAudienceActionLabels.SequenceEqual(["Mute to Audience"]), "The native scanner must use BEACN's verified Audience action label.");
 
