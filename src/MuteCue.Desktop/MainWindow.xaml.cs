@@ -44,7 +44,9 @@ public partial class MainWindow : Window
         };
         LoadSettings();
         _isLoading = false;
-        StatusText.Text = $"{AppChannel.ProductName} is monitoring BEACN and Discord locally.";
+        StatusText.Text = string.IsNullOrWhiteSpace(_runtime.CompatibilityStatus)
+            ? $"{AppChannel.ProductName} is monitoring BEACN and Discord locally."
+            : _runtime.CompatibilityStatus;
         SelectTab("Discord");
 
         if (startInTray)
