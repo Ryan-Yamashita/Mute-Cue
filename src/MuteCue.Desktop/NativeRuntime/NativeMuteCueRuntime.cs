@@ -56,6 +56,7 @@ public sealed class NativeMuteCueRuntime : IDisposable
     public event Action<string>? BeacnStatusChanged;
     public string DiscordConnectionStatus { get; private set; }
     public string BeacnConnectionStatus { get; private set; } = "Discovering the BEACN mixer layout...";
+    internal string CompatibilityStatus => _compatibility.StatusDescription;
 
     internal NativeMuteCueRuntime(NativeSettingsDocument settings, CompatibilityDiagnostics compatibility = default)
     {
