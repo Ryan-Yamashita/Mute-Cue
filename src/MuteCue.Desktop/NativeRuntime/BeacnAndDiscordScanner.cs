@@ -194,6 +194,9 @@ namespace BeacnMuteOverlay {
         private static readonly ConcurrentDictionary<string, int> pendingUrgentActionRefreshes =
             new ConcurrentDictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private const int MaximumFaderRefreshesPerScan = 1;
+        // Dev-only USB-free requests use cached BEACN accessibility elements without
+        // screen hit-testing, which could otherwise reach a foreground game window.
+        private const int PassiveSubtreeOnlyRefreshMask = 32;
         private static readonly ConcurrentQueue<HardwareRefreshRequest> pendingHardwareRefreshes =
             new ConcurrentQueue<HardwareRefreshRequest>();
         private const int MaximumPendingHardwareRefreshes = 128;
@@ -379,6 +382,19 @@ namespace BeacnMuteOverlay {
                 ? 5
                 : String.Equals(mode, "Audience", StringComparison.OrdinalIgnoreCase) ? 10 : 15;
             QueueUrgentFaderRefresh(name, mask);
+        }
+
+        // Used only by the explicit Dev USB-free compatibility experiment. The
+        // refresh reads the cached BEACN subtree, never a foreground window hit-test.
+        public static void RequestPassiveFaderRefresh(string name) {
+            if (String.IsNullOrWhiteSpace(name)) return;
+            QueueUrgentFaderRefresh(name, PassiveSubtreeOnlyRefreshMask | 3);
+        }
+
+        internal static bool AllowsRenderedProbeForMask(int mask) {
+            // An explicit rendered refresh (e.g., actual hotkey/click) overrides
+            // a simultaneously queued passive request for the same fader.
+            return (mask & PassiveSubtreeOnlyRefreshMask) == 0 || (mask & 28) != 0;
         }
 
         public static void RequestHardwareRefresh(string preferredName, string mode, int position, long requestId, long mappingGeneration, bool mappingConfident) {
@@ -1900,7 +1916,10 @@ namespace BeacnMuteOverlay {
                     matchedNames.Add(fader.Name);
                     bool changed;
                     if (!TryRefreshFaderAction(fader, mask, out changed)) {
-                        if (RetainActionRefreshUntilNextDiscovery(fader.Name, mask, urgent)) {
+                        // Passive probes can legitimately fail while BEACN is behind
+                        // other windows. Do not promote them into costly rediscovery.
+                        if ((mask & PassiveSubtreeOnlyRefreshMask) == 0 &&
+                            RetainActionRefreshUntilNextDiscovery(fader.Name, mask, urgent)) {
                             allSucceeded = false;
                         }
                     } else {
@@ -1949,6 +1968,7 @@ namespace BeacnMuteOverlay {
                     ref allRowBounds,
                     ref allProbeBounds,
                     (mask & 4) != 0,
+                    AllowsRenderedProbeForMask(mask),
                     out allMenuButtonSeen
                 );
                 if (allRead) {
@@ -1984,6 +2004,7 @@ namespace BeacnMuteOverlay {
                     ref audienceRowBounds,
                     ref audienceProbeBounds,
                     (mask & 8) != 0,
+                    AllowsRenderedProbeForMask(mask),
                     out audienceMenuButtonSeen
                 );
                 if (audienceRead) {
@@ -2295,6 +2316,7 @@ namespace BeacnMuteOverlay {
             ref Rect rowBounds,
             ref Rect probeBounds,
             bool forceRenderedProbe,
+            bool allowRenderedHitTesting,
             out bool menuButtonSeen
         ) {
             menuButtonSeen = false;
@@ -2340,6 +2362,7 @@ namespace BeacnMuteOverlay {
             bool hitTestMenuButtonSeen;
             bool cursorInsideRow = IsCursorInside(rowBounds);
             if (
+                allowRenderedHitTesting &&
                 (forceRenderedProbe || cursorInsideRow) &&
                 TryHitTestActionMenu(probeBounds, rowBounds, bounds, processId, out hitTestMenuButtonSeen)
             ) {
@@ -2370,6 +2393,7 @@ namespace BeacnMuteOverlay {
                 return true;
             }
             if (
+                allowRenderedHitTesting &&
                 !cursorInsideRow &&
                 TryHitTestActionMenu(probeBounds, rowBounds, bounds, processId, out hitTestMenuButtonSeen)
             ) {
