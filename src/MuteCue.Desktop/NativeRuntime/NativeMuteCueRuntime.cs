@@ -28,6 +28,7 @@ public sealed class NativeMuteCueRuntime : IDisposable
     private Task<BeacnFaderState[]>? _beacnScan;
     private Task<MixCreateUsbRoute>? _usbRouteDiscovery;
     private MixCreateUsbMonitor? _usbMonitor;
+    private BeacnWinEventProbe? _beacnWinEventProbe;
     private BeacnFaderState[] _beacnStates = [];
     private static readonly DiscordLocalState UnknownDiscordState = new();
     private DiscordLocalState _discordRpcState = new();
@@ -79,6 +80,11 @@ public sealed class NativeMuteCueRuntime : IDisposable
     internal void Start()
     {
         BeacnTimingTrace.Start(_compatibility.EnableBeacnTiming);
+        if (_compatibility.EnableBeacnWinEvents)
+        {
+            _beacnWinEventProbe = new BeacnWinEventProbe();
+            _ = _beacnWinEventProbe.EnsureStarted();
+        }
         ConfigureBeacnScanner();
         if (!_compatibility.DisableGlobalHooks)
         {
@@ -155,6 +161,7 @@ public sealed class NativeMuteCueRuntime : IDisposable
     {
         if (_disposed) return;
         CompleteScans();
+        _ = _beacnWinEventProbe?.EnsureStarted();
         ProcessHardwareResult();
         CompleteUsbRouteDiscovery();
         ReloadHotkeyMappings(force: false);
@@ -666,6 +673,8 @@ public sealed class NativeMuteCueRuntime : IDisposable
         KeyboardInput.StopKeyboardListener();
         _usbMonitor?.Dispose();
         _usbMonitor = null;
+        _beacnWinEventProbe?.Dispose();
+        _beacnWinEventProbe = null;
         BeacnTimingTrace.Flush();
         DiscordRpcMonitor.Stop();
         BeacnAppScanner.Shutdown();
