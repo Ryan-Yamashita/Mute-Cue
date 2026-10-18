@@ -56,6 +56,24 @@ try
         ["--dev-no-usb-capture", "--dev-fast-beacn-fallback", "--dev-beacn-timing"],
         isDevelopment: false).EnableBeacnTiming,
         "Stable must never activate the timing trace.");
+    var beacnEvents = CompatibilityDiagnostics.FromArguments(
+        ["--dev-no-usb-capture", "--dev-fast-beacn-fallback", "--dev-beacn-timing", "--dev-beacn-win-events"],
+        isDevelopment: true);
+    Assert(beacnEvents.EnableBeacnWinEvents && beacnEvents.EnableBeacnTiming,
+        "The BEACN process event probe must be opt-in and enabled only alongside local timing.");
+    Assert(!CompatibilityDiagnostics.FromArguments(
+        ["--dev-beacn-win-events"], isDevelopment: true).EnableBeacnWinEvents,
+        "An isolated event flag must not start accessibility hooks.");
+    Assert(!CompatibilityDiagnostics.FromArguments(
+        ["--dev-no-usb-capture", "--dev-fast-beacn-fallback", "--dev-beacn-timing", "--dev-beacn-win-events"],
+        isDevelopment: false).EnableBeacnWinEvents,
+        "Stable must not create accessibility event hooks even if every diagnostic flag is supplied.");
+    Assert(BeacnWinEventProbe.EventLabel(0x800A) == "state" &&
+        BeacnWinEventProbe.EventLabel(0x800E) == "value" &&
+        BeacnWinEventProbe.EventLabel(0x8013) == "invoke",
+        "The event probe must filter to relevant Windows accessibility notifications.");
+    Assert(BeacnWinEventProbe.EventLabel(0x800B) is null,
+        "High-frequency position notifications must not enter the timing log.");
     Assert(CompatibilityDiagnostics.FromArguments([], isDevelopment: true) == default, "Normal Dev behavior must remain unchanged.");
     Assert(developmentCompatibility.StatusDescription.Contains("global input hooks", StringComparison.Ordinal), "Diagnostic status must describe active limitations.");
     Assert(Math.Abs(NativeMuteCueRuntime.CalculateUsbFreeFallbackIntervalMilliseconds(8, 10d) - 125d) < 0.01,
