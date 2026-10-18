@@ -29,8 +29,19 @@ The available combinations are:
 | `--dev-no-global-hooks` | No global keyboard/mouse hook registration. USB button detection, BEACN UI scanning, Discord and overlay remain; click/hotkey predictions may show with a delay |
 | `--dev-no-overlay` | The indicator window remains hidden. Mute detection continues, to isolate overlay rendering |
 | `--dev-no-usb-capture --dev-no-global-hooks` | BEACN UI scanner + Discord + overlay only |
+| `--dev-no-usb-capture --dev-fast-beacn-fallback` | **Experimental:** no USBPcap capture; reconcile selected BEACN faders through existing UI Automation roughly every 500 ms per selected fader (rotating). May be slower, miss changes or increase UIA cost; must be validated on hardware outside Apex first |
 
-Switches require a restart. Only one Dev instance can run at a time. The flags are case-insensitive.
+Switches require a restart. Only one Dev instance can run at a time. The flags are case-insensitive. The `--dev-fast-beacn-fallback` switch is ignored unless `--dev-no-usb-capture` is also passed. It intentionally preserves the existing USB-off diagnostic behavior when not specified.
+
+### Experimental USB-free BEACN fallback
+
+Use this command to evaluate physical knob and Mute to Audience behavior **with Apex closed**, while keeping global hotkeys working:
+
+```bat
+"Build and Launch Mute Cue Dev.cmd" --dev-no-usb-capture --dev-fast-beacn-fallback
+```
+
+Exit Dev from the tray first. In the BEACN application, verify its normal mute UI reflects the changes; then try each physical knob and the Mute to Audience control. Leave a fader muted for several seconds, and time how long the overlay takes to appear and disappear. This path only refreshes the user's selected faders through BEACN's existing UI Automation controls, never reads the game process, and does not touch the USBPcap driver. The bounded 500 ms rotating schedule is a development hypothesis, **not a hardware-tested fix**. If the status remains stale or CPU/UI performance suffers, exit Dev and revert to Stable. Do not start Apex to validate an unproven fallback.
 
 **Important driver limitation:** `--dev-no-usb-capture` stops Mute Cue from launching USBPcapCMD.exe and initiating packet capture. It **does not unload or uninstall the USBPcap kernel filter driver**. If Event Viewer or Javelin names a USBPcap driver, handle that separately through official driver update/removal guidance, then reboot. Do not alter EA Javelin or game protections.
 
