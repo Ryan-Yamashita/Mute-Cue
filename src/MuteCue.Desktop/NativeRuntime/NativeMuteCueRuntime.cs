@@ -187,17 +187,26 @@ public sealed class NativeMuteCueRuntime : IDisposable
             return;
         }
 
-        var now = DateTime.UtcNow;
-        if ((now - _lastUsbFreeFallbackRefreshUtc).TotalMilliseconds < 500)
+        // Never stack diagnostic reads behind an already-running scanner task.
+        if (_beacnScan is not null || BeacnAppScanner.GeometryRefreshInProgress)
         {
             return;
         }
 
-        _lastUsbFreeFallbackRefreshUtc = now;
         var selectedFaders = FaderSourceParser.Merge(
             _settings.GetString("BeacnAllFaderNames", "Mic"),
             _settings.GetString("BeacnAudienceFaderNames", "Mic"));
         if (selectedFaders.Count == 0)
+        {
+            return;
+        }
+
+        // Target a roughly one-second sweep regardless of how many faders are
+        // selected. Back off if the BEACN accessibility provider is expensive.
+        var intervalMilliseconds = CalculateUsbFreeFallbackIntervalMilliseconds(
+            selectedFaders.Count, BeacnAppScanner.LastScanMilliseconds);
+        var now = DateTime.UtcNow;
+        if ((now - _lastUsbFreeFallbackRefreshUtc).TotalMilliseconds < intervalMilliseconds)
         {
             return;
         }
@@ -214,9 +223,22 @@ public sealed class NativeMuteCueRuntime : IDisposable
                 continue;
             }
 
-            BeacnAppScanner.RequestUrgentFaderRefresh(name, "Both");
+            _lastUsbFreeFallbackRefreshUtc = now;
+            BeacnAppScanner.RequestPassiveFaderRefresh(name);
             break;
         }
+    }
+
+    internal static double CalculateUsbFreeFallbackIntervalMilliseconds(int selectedFaderCount, double lastScanMilliseconds)
+    {
+        var baseline = Math.Clamp(1000d / Math.Max(1, selectedFaderCount), 125d, 250d);
+        if (!double.IsFinite(lastScanMilliseconds) || lastScanMilliseconds < 0)
+        {
+            return 500d;
+        }
+
+        // Keep provider calls bounded even if the last scan was slow.
+        return Math.Clamp(Math.Max(baseline, lastScanMilliseconds * 2d), baseline, 500d);
     }
 
     private void StartDueScans()
