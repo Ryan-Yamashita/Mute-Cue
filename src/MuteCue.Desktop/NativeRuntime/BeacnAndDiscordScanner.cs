@@ -7,6 +7,7 @@ using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using MuteCue.Desktop.NativeRuntime;
 using System.Windows;
 using System.Windows.Automation;
 using Point = System.Windows.Point;
@@ -1447,6 +1448,7 @@ namespace BeacnMuteOverlay {
                 if (fader.PersonalButton != null) {
                     fader.PersonalChangedHandler = delegate(object sender, AutomationPropertyChangedEventArgs args) {
                         RecordOutputEdge(fader.Name, true);
+                        BeacnTimingTrace.Record("uia-output-event", fader.Name, "All");
                         MarkActionEvent("output " + fader.Name + "/All");
                         RequestFaderRefresh(fader.Name, "All");
                     };
@@ -1462,6 +1464,7 @@ namespace BeacnMuteOverlay {
                 if (fader.AudienceButton != null) {
                     fader.AudienceChangedHandler = delegate(object sender, AutomationPropertyChangedEventArgs args) {
                         RecordOutputEdge(fader.Name, false);
+                        BeacnTimingTrace.Record("uia-output-event", fader.Name, "Audience");
                         MarkActionEvent("output " + fader.Name + "/Audience");
                         RequestFaderRefresh(fader.Name, "Audience");
                     };
@@ -1495,6 +1498,7 @@ namespace BeacnMuteOverlay {
                                 " row " + fader.Name + "/All geometry settling";
                             return;
                         }
+                        BeacnTimingTrace.Record("uia-row-event", fader.Name, "All");
                         MarkActionEvent("row " + fader.Name + "/All " + args.StructureChangeType.ToString());
                         RequestFaderRefresh(fader.Name, "All");
                     };
@@ -1513,6 +1517,7 @@ namespace BeacnMuteOverlay {
                                 " row " + fader.Name + "/Audience geometry settling";
                             return;
                         }
+                        BeacnTimingTrace.Record("uia-row-event", fader.Name, "Audience");
                         MarkActionEvent("row " + fader.Name + "/Audience " + args.StructureChangeType.ToString());
                         RequestFaderRefresh(fader.Name, "Audience");
                     };
@@ -1915,7 +1920,16 @@ namespace BeacnMuteOverlay {
                     if (!requested.TryGetValue(fader.Name, out mask)) continue;
                     matchedNames.Add(fader.Name);
                     bool changed;
-                    if (!TryRefreshFaderAction(fader, mask, out changed)) {
+                    long startedAt = BeacnTimingTrace.Enabled ? Stopwatch.GetTimestamp() : 0;
+                    bool readSucceeded = TryRefreshFaderAction(fader, mask, out changed);
+                    if (startedAt != 0)
+                    {
+                        var durationMs = Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds;
+                        BeacnTimingTrace.Record("probe-finished", fader.Name,
+                            $"ms={durationMs:0};mask={mask};ok={readSucceeded};changed={changed};AllKnown={fader.AllActionSeen};AllActive={!fader.AllActionMenuButtonSeen};AudienceKnown={fader.AudienceActionSeen};AudienceActive={!fader.AudienceActionMenuButtonSeen}");
+                    }
+
+                    if (!readSucceeded) {
                         // Passive probes can legitimately fail while BEACN is behind
                         // other windows. Do not promote them into costly rediscovery.
                         if ((mask & PassiveSubtreeOnlyRefreshMask) == 0 &&
