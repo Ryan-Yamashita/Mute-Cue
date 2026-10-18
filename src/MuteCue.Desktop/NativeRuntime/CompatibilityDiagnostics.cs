@@ -10,7 +10,8 @@ namespace MuteCue.Desktop.NativeRuntime;
 internal readonly record struct CompatibilityDiagnostics(
     bool DisableGlobalHooks,
     bool DisableUsbCapture,
-    bool DisableOverlay)
+    bool DisableOverlay,
+    bool EnableFastBeacnFallback = false)
 {
     internal static CompatibilityDiagnostics FromArguments(IEnumerable<string> arguments, bool isDevelopment)
     {
@@ -23,7 +24,9 @@ internal readonly record struct CompatibilityDiagnostics(
         return new CompatibilityDiagnostics(
             DisableGlobalHooks: switches.Contains("--dev-no-global-hooks"),
             DisableUsbCapture: switches.Contains("--dev-no-usb-capture"),
-            DisableOverlay: switches.Contains("--dev-no-overlay"));
+            DisableOverlay: switches.Contains("--dev-no-overlay"),
+            EnableFastBeacnFallback: switches.Contains("--dev-no-usb-capture") &&
+                switches.Contains("--dev-fast-beacn-fallback"));
     }
 
     internal string StatusDescription
@@ -34,6 +37,7 @@ internal readonly record struct CompatibilityDiagnostics(
             if (DisableGlobalHooks) disabled.Add("global input hooks");
             if (DisableUsbCapture) disabled.Add("USB capture");
             if (DisableOverlay) disabled.Add("overlay rendering");
+            if (EnableFastBeacnFallback) disabled.Add("USB-free BEACN fallback enabled");
 
             return disabled.Count == 0
                 ? string.Empty
