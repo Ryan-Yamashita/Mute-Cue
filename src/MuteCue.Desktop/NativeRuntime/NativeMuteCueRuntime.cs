@@ -39,6 +39,8 @@ public sealed class NativeMuteCueRuntime : IDisposable
     private DateTime _lastUsbFreeFallbackRefreshUtc = DateTime.MinValue;
     private int _nextUsbFreeFallbackFaderIndex;
     private DateTime _previewUntilUtc = DateTime.MinValue;
+    private DateTime _lastTraceFlushUtc = DateTime.MinValue;
+    private string _lastTracedBeacnOverlay = string.Empty;
     private long _usbRequestId;
     private long _lastHardwareResultSequence;
     private bool _disposed;
@@ -76,6 +78,7 @@ public sealed class NativeMuteCueRuntime : IDisposable
 
     internal void Start()
     {
+        BeacnTimingTrace.Start(_compatibility.EnableBeacnTiming);
         ConfigureBeacnScanner();
         if (!_compatibility.DisableGlobalHooks)
         {
@@ -160,6 +163,13 @@ public sealed class NativeMuteCueRuntime : IDisposable
         ScheduleUsbFreeFallbackRefresh();
         StartDueScans();
         UpdateOverlay();
+        if (BeacnTimingTrace.Enabled &&
+            (DateTime.UtcNow - _lastTraceFlushUtc).TotalSeconds >= 1)
+        {
+            _lastTraceFlushUtc = DateTime.UtcNow;
+            BeacnTimingTrace.Record("scanner", "", $"scanMs={BeacnAppScanner.LastScanMilliseconds:0};pending={BeacnAppScanner.HasPendingChanges};geometrySettling={BeacnAppScanner.GeometryRefreshInProgress};faders={_beacnStates.Length};lastEvent={BeacnAppScanner.LastActionEventSummary}");
+            BeacnTimingTrace.Flush();
+        }
     }
 
     private void CompleteScans()
@@ -168,12 +178,48 @@ public sealed class NativeMuteCueRuntime : IDisposable
         {
             try
             {
+                var previous = _beacnStates;
                 _beacnStates = _beacnScan.GetAwaiter().GetResult().OrderBy(state => state.Order).ToArray();
+                TraceChangedFaderStates(previous, _beacnStates);
                 _hardwareMapper.UpdateStates(_beacnStates);
                 ReconcileBeacnPredictions();
             }
             catch { /* BEACN can rebuild its accessibility tree during a redraw. */ }
             finally { _beacnScan = null; }
+        }
+    }
+
+    private static void TraceChangedFaderStates(
+        IReadOnlyList<BeacnFaderState> previous,
+        IReadOnlyList<BeacnFaderState> current)
+    {
+        if (!BeacnTimingTrace.Enabled)
+        {
+            return;
+        }
+
+        foreach (var state in current)
+        {
+            var before = previous.FirstOrDefault(item => string.Equals(
+                item.Name, state.Name, StringComparison.OrdinalIgnoreCase));
+            if (before is null)
+            {
+                continue;
+            }
+
+            if (state.AllActionStateKnown != before.AllActionStateKnown ||
+                (state.AllActionStateKnown && state.AllActionActive != before.AllActionActive))
+            {
+                BeacnTimingTrace.Record("observed-state", state.Name,
+                    $"All={state.AllActionActive};known={state.AllActionStateKnown};revision={state.ActionRevision}");
+            }
+
+            if (state.AudienceActionStateKnown != before.AudienceActionStateKnown ||
+                (state.AudienceActionStateKnown && state.AudienceActionActive != before.AudienceActionActive))
+            {
+                BeacnTimingTrace.Record("observed-state", state.Name,
+                    $"Audience={state.AudienceActionActive};known={state.AudienceActionStateKnown};revision={state.ActionRevision}");
+            }
         }
     }
 
@@ -224,6 +270,7 @@ public sealed class NativeMuteCueRuntime : IDisposable
             }
 
             _lastUsbFreeFallbackRefreshUtc = now;
+            BeacnTimingTrace.Record("probe-queued", name, "All+Audience");
             BeacnAppScanner.RequestPassiveFaderRefresh(name);
             break;
         }
@@ -271,6 +318,7 @@ public sealed class NativeMuteCueRuntime : IDisposable
         {
             if (_hotkeyBindings.TryGetValue(gestureCode, out var binding))
             {
+                BeacnTimingTrace.Record("hotkey", binding.Name, binding.Mode);
                 RequestRenderedBeacnAction(binding.Name, binding.Mode);
             }
         }
@@ -595,6 +643,16 @@ public sealed class NativeMuteCueRuntime : IDisposable
             GetDisplayedBeacnStates(),
             discordState,
             DateTime.UtcNow < _previewUntilUtc);
+        if (BeacnTimingTrace.Enabled)
+        {
+            var beacnOverlay = string.Join(" | ", sources.Where(
+                source => source.StartsWith("BEACN ", StringComparison.OrdinalIgnoreCase)));
+            if (!string.Equals(_lastTracedBeacnOverlay, beacnOverlay, StringComparison.Ordinal))
+            {
+                _lastTracedBeacnOverlay = beacnOverlay;
+                BeacnTimingTrace.Record("overlay", "", beacnOverlay.Length == 0 ? "clear" : beacnOverlay);
+            }
+        }
         _overlay.ShowSources(sources);
     }
 
@@ -608,6 +666,7 @@ public sealed class NativeMuteCueRuntime : IDisposable
         KeyboardInput.StopKeyboardListener();
         _usbMonitor?.Dispose();
         _usbMonitor = null;
+        BeacnTimingTrace.Flush();
         DiscordRpcMonitor.Stop();
         BeacnAppScanner.Shutdown();
         _overlay.Close();
