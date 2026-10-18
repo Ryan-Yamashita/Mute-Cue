@@ -36,6 +36,8 @@ public sealed class NativeMuteCueRuntime : IDisposable
     private DateTime _lastBeacnScanStarted = DateTime.MinValue;
     private DateTime _lastHotkeyReloadUtc = DateTime.MinValue;
     private DateTime _lastUsbDiscoveryStartedUtc = DateTime.MinValue;
+    private DateTime _lastUsbFreeFallbackRefreshUtc = DateTime.MinValue;
+    private int _nextUsbFreeFallbackFaderIndex;
     private DateTime _previewUntilUtc = DateTime.MinValue;
     private long _usbRequestId;
     private long _lastHardwareResultSequence;
@@ -155,6 +157,7 @@ public sealed class NativeMuteCueRuntime : IDisposable
         ReloadHotkeyMappings(force: false);
         PublishBeacnStatus();
         ProcessDiscordRpcEvents();
+        ScheduleUsbFreeFallbackRefresh();
         StartDueScans();
         UpdateOverlay();
     }
@@ -171,6 +174,48 @@ public sealed class NativeMuteCueRuntime : IDisposable
             }
             catch { /* BEACN can rebuild its accessibility tree during a redraw. */ }
             finally { _beacnScan = null; }
+        }
+    }
+
+    private void ScheduleUsbFreeFallbackRefresh()
+    {
+        // Dev-only diagnostic: exercise the existing BEACN UI Automation path
+        // without active USB packet capture. Never touches a game process.
+        if (!_compatibility.DisableUsbCapture || !_compatibility.EnableFastBeacnFallback ||
+            _beacnStates.Length == 0)
+        {
+            return;
+        }
+
+        var now = DateTime.UtcNow;
+        if ((now - _lastUsbFreeFallbackRefreshUtc).TotalMilliseconds < 500)
+        {
+            return;
+        }
+
+        _lastUsbFreeFallbackRefreshUtc = now;
+        var selectedFaders = FaderSourceParser.Merge(
+            _settings.GetString("BeacnAllFaderNames", "Mic"),
+            _settings.GetString("BeacnAudienceFaderNames", "Mic"));
+        if (selectedFaders.Count == 0)
+        {
+            return;
+        }
+
+        // Reconcile one selected fader per interval to avoid an unbounded UIA
+        // storm when users select many sources. Queueing is coalesced by the scanner.
+        for (var attempted = 0; attempted < selectedFaders.Count; attempted++)
+        {
+            var index = _nextUsbFreeFallbackFaderIndex % selectedFaders.Count;
+            _nextUsbFreeFallbackFaderIndex++;
+            var name = selectedFaders[index];
+            if (!_beacnStates.Any(state => string.Equals(state.Name, name, StringComparison.OrdinalIgnoreCase)))
+            {
+                continue;
+            }
+
+            BeacnAppScanner.RequestUrgentFaderRefresh(name, "Both");
+            break;
         }
     }
 
