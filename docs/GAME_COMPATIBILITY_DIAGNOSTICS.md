@@ -72,6 +72,28 @@ The output records UI Automation event notifications, when the polling request w
 
 This diagnostic trace is not a fix and does not promise compatibility with Javelin. No Apex testing is needed to characterize the four-second BEACN delay.
 
+### BEACN-process-only Windows accessibility event experiment
+
+Mix Create device inspection found no related HIDClass entry for its USB VID/PID. A separate opt-in Dev probe now tests whether BEACN's **own process** emits Windows accessibility change notifications when a physical knob or mute button changes.
+
+```powershell
+Set-Location "$HOME\Mute-Cue-Javelin-Test"
+git pull --ff-only
+& ".\Build and Launch Mute Cue Dev.cmd" --dev-no-usb-capture --dev-fast-beacn-fallback --dev-beacn-timing --dev-beacn-win-events
+```
+
+Completely exit any running Dev instance first; keep Apex **closed**. The additional flag records accessible events originating **only from the BEACN process**. It uses Microsoft's `SetWinEventHook` with `WINEVENT_OUTOFCONTEXT` and a nonzero BEACN process ID; it does **not** inject a DLL, read game windows, capture USB traffic, hook all processes, or change mute states. Without the flag, the probe is not created. The app must be restarted to switch it off.
+
+With the BEACN mixer window visible, toggle one or two physical knobs and Mute to Audience buttons. Repeat once with BEACN behind another ordinary window. Exit Dev and examine:
+
+```powershell
+Import-Csv "$env:LOCALAPPDATA\MuteCue-Dev\Diagnostics\beacn-timing.csv" |
+    Where-Object { $_.event -in 'win-hook', 'win-event', 'uia-output-event', 'uia-row-event', 'observed-state' } |
+    Select-Object -Last 70 | Format-Table -AutoSize -Wrap
+```
+
+An event row tagged `win-event` is evidence of an accessibility event but **not proof it identifies the particular fader, mode, or final mute state**. If no relevant event is emitted by the BEACN App, this route cannot provide a reliable hardware trigger. Do not implement event-triggered state updates until the identity and event reliability are established. The event hook is for BEACN only, but anti-cheat compatibility is not guaranteed: **do not test this probe with Apex running**.
+
 ### Device-interface investigation after the mic-only control
 
 The user confirmed that reducing the Dev fallback to only the Mic fader makes the indicator much faster. With seven faders, the BEACN/JUCE UI Automation subtree read takes approximately 325–436 ms per fader and Mute Cue checks the selected faders serially. Repeatedly increasing polling cadence is unlikely to solve all-seven-fader responsiveness.
