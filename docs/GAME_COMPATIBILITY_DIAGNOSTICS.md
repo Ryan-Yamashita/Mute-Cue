@@ -12,9 +12,15 @@ Mute Cue does not intentionally hook, inject into, or inspect game processes. Th
 
 ## Run diagnostics
 
-Build the current branch using `Build and Launch Mute Cue Dev.cmd --build-only` from Command Prompt (or run the launcher once and exit Dev).
+From Command Prompt at the repository root, run the quoted launcher with an optional diagnostic flag. The launcher builds Dev and passes the flag through to the executable:
 
-Then start `artifacts\dev\MuteCue-Dev.exe` from Command Prompt using one of the following:
+```bat
+"Build and Launch Mute Cue Dev.cmd" --dev-no-usb-capture
+```
+
+To run a different test, **Exit** Mute Cue Dev from its tray icon first, then rerun the launcher with the new flags. The settings window identifies the active disabled components. To build only without launching, run `"Build and Launch Mute Cue Dev.cmd" --build-only`.
+
+The available combinations are:
 
 | Launch arguments | Expected difference |
 | --- | --- |
@@ -26,9 +32,11 @@ Then start `artifacts\dev\MuteCue-Dev.exe` from Command Prompt using one of the 
 
 Switches require a restart. Only one Dev instance can run at a time. The flags are case-insensitive.
 
+**Important driver limitation:** `--dev-no-usb-capture` stops Mute Cue from launching USBPcapCMD.exe and initiating packet capture. It **does not unload or uninstall the USBPcap kernel filter driver**. If Event Viewer or Javelin names a USBPcap driver, handle that separately through official driver update/removal guidance, then reboot. Do not alter EA Javelin or game protections.
+
 ## Controlled test sequence
 
-1. Confirm **Apex launches normally with Mute Cue fully exited**, not merely its indicator hidden. Record the exact error and Windows Reliability Monitor event.
+1. Confirm **Apex launches normally with Mute Cue fully exited**, not merely its indicator hidden. In Event Viewer, check **Windows Logs → Application** for `EA Javelin Anticheat` around the crash, including **Event ID** and **ExitType**. Check **Windows Logs → System** for a nearby Service Control Manager event. Preserve the exact **General** message and timestamp, and redact any personally identifying paths or session tokens before sharing.
 2. Reproduce with baseline Dev, then test **USB disabled only**.
 3. If still reproducible, test **hooks disabled only**, then **both disabled**.
 4. If still reproducible, test **overlay disabled**, initially with both other flags off.
