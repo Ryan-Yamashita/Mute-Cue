@@ -207,7 +207,7 @@ public sealed class NativeMuteCueRuntime : IDisposable
         for (var attempted = 0; attempted < selectedFaders.Count; attempted++)
         {
             var index = _nextUsbFreeFallbackFaderIndex % selectedFaders.Count;
-            _nextUsbFreeFallbackFaderIndex++;
+            _nextUsbFreeFallbackFaderIndex = (index + 1) % selectedFaders.Count;
             var name = selectedFaders[index];
             if (!_beacnStates.Any(state => string.Equals(state.Name, name, StringComparison.OrdinalIgnoreCase)))
             {
