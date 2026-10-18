@@ -15,6 +15,7 @@ public sealed class NativeMuteCueRuntime : IDisposable
     internal static readonly string[] VerifiedAudienceActionLabels = ["Mute to Audience"];
 
     private readonly NativeSettingsDocument _settings;
+    private readonly CompatibilityDiagnostics _compatibility;
     private readonly NativeOverlayWindow _overlay;
     private readonly DiscordAuthorizationStore _discordAuthorizationStore = new();
     private readonly DiscordPublicClient _discordPublicClient;
@@ -56,9 +57,10 @@ public sealed class NativeMuteCueRuntime : IDisposable
     public string DiscordConnectionStatus { get; private set; }
     public string BeacnConnectionStatus { get; private set; } = "Discovering the BEACN mixer layout...";
 
-    internal NativeMuteCueRuntime(NativeSettingsDocument settings)
+    internal NativeMuteCueRuntime(NativeSettingsDocument settings, CompatibilityDiagnostics compatibility = default)
     {
         _settings = settings;
+        _compatibility = compatibility;
         _discordPublicClient = DiscordPublicClient.Load(System.IO.Path.Combine(AppContext.BaseDirectory, "MuteCue.DiscordPublicClient.json"));
         _discordAuthorization = _discordAuthorizationStore.Load();
         DiscordConnectionStatus = _discordPublicClient.IsAvailable ? "Connect to monitor Discord mute and deafen state." : _discordPublicClient.Detail;
@@ -72,9 +74,15 @@ public sealed class NativeMuteCueRuntime : IDisposable
     internal void Start()
     {
         ConfigureBeacnScanner();
-        KeyboardInput.StartMouseListener();
+        if (!_compatibility.DisableGlobalHooks)
+        {
+            KeyboardInput.StartMouseListener();
+        }
         ReloadHotkeyMappings(force: true);
-        StartUsbRouteDiscovery();
+        if (!_compatibility.DisableUsbCapture)
+        {
+            StartUsbRouteDiscovery();
+        }
         if (_discordPublicClient.IsAvailable &&
             (!string.IsNullOrWhiteSpace(_discordAuthorization.AccessToken) || !string.IsNullOrWhiteSpace(_discordAuthorization.RefreshToken)))
         {
@@ -177,7 +185,7 @@ public sealed class NativeMuteCueRuntime : IDisposable
 
     private void InputTick()
     {
-        while (KeyboardInput.ConsumeLeftClick(out var x, out var y))
+        while (!_compatibility.DisableGlobalHooks && KeyboardInput.ConsumeLeftClick(out var x, out var y))
         {
             var target = BeacnAppScanner.ResolveCachedActionAtPoint(x, y);
             if (target is not null)
@@ -191,7 +199,7 @@ public sealed class NativeMuteCueRuntime : IDisposable
             }
         }
 
-        while (KeyboardInput.ConsumeKeyGesture(out var gestureCode))
+        while (!_compatibility.DisableGlobalHooks && KeyboardInput.ConsumeKeyGesture(out var gestureCode))
         {
             if (_hotkeyBindings.TryGetValue(gestureCode, out var binding))
             {
@@ -288,13 +296,16 @@ public sealed class NativeMuteCueRuntime : IDisposable
         _hotkeyBindings = updated;
         if (force || gestureSetChanged)
         {
-            KeyboardInput.StartKeyboardListener(_hotkeyBindings.Keys.ToArray());
+            if (!_compatibility.DisableGlobalHooks)
+            {
+                KeyboardInput.StartKeyboardListener(_hotkeyBindings.Keys.ToArray());
+            }
         }
     }
 
     private void StartUsbRouteDiscovery()
     {
-        if (_disposed || _usbMonitor is not null || _usbRouteDiscovery is not null)
+        if (_disposed || _compatibility.DisableUsbCapture || _usbMonitor is not null || _usbRouteDiscovery is not null)
         {
             return;
         }
@@ -504,6 +515,12 @@ public sealed class NativeMuteCueRuntime : IDisposable
 
     private void UpdateOverlay()
     {
+        if (_compatibility.DisableOverlay)
+        {
+            _overlay.ShowSources([]);
+            return;
+        }
+
         var discordState = _discordRpcStateKnown ? _discordRpcState : UnknownDiscordState;
         var sources = OverlaySourceComposer.Compose(
             _settings,
