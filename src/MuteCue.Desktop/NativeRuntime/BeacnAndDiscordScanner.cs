@@ -2033,9 +2033,9 @@ namespace BeacnMuteOverlay {
                 }
             }
 
-            // A failed targeted read is also a real observation: it makes the row
-            // explicitly unknown and must be published. The per-fader revision
-            // prevents cache-only or unrelated reads from confirming this row.
+            // An ordinary failed targeted read makes the row unknown and advances
+            // its revision. Passive Dev probes retain cached authority on transient
+            // failure and advance the revision only after a real successful read.
             if ((mask & 3) != 0 && (!passiveProbe || observed)) fader.ActionRevision = MarkStateObservation();
             return succeeded;
         }
