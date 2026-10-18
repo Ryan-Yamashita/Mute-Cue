@@ -30,6 +30,7 @@ The available combinations are:
 | `--dev-no-overlay` | The indicator window remains hidden. Mute detection continues, to isolate overlay rendering |
 | `--dev-no-usb-capture --dev-no-global-hooks` | BEACN UI scanner + Discord + overlay only |
 | `--dev-no-usb-capture --dev-fast-beacn-fallback` | **Experimental:** no USBPcap capture; rotate selected BEACN faders through cached UI Automation with an adaptive 125–500 ms scheduling interval (based on selected count and scan cost). The fallback does not use screen hit-testing; verify timing and correctness on hardware outside Apex first |
+| `--dev-no-usb-capture --dev-fast-beacn-fallback --dev-beacn-timing` | Same fallback, with a Dev-only local timing CSV to identify why BEACN reads remain several seconds late |
 
 Switches require a restart. Only one Dev instance can run at a time. The flags are case-insensitive. The `--dev-fast-beacn-fallback` switch is ignored unless `--dev-no-usb-capture` is also passed. It intentionally preserves the existing USB-off diagnostic behavior when not specified.
 
@@ -44,6 +45,32 @@ Use this command to evaluate physical knob and Mute to Audience behavior **with 
 Exit Dev from the tray first. In the BEACN application, verify its normal mute UI reflects the changes; then try each physical knob and the Mute to Audience control. Leave a fader muted for several seconds, and time how long the overlay takes to appear and disappear. This path only refreshes the user's selected faders through BEACN's existing UI Automation controls, never reads the game process, and does not touch the USBPcap driver. The adaptive sweep aims to check each selected fader approximately once per second when BEACN UI Automation is fast, with backoff for expensive scans. It queues only when a scan is idle, and passive reads avoid screen hit-tests that could probe a game covering the BEACN window. These changes are **not yet hardware-tested**; watch for incorrect status, flickering, added CPU cost, or multi-second delays. If the status remains stale or CPU/UI performance suffers, exit Dev and revert to Stable. Do not start Apex to validate an unproven fallback.
 
 **Important driver limitation:** `--dev-no-usb-capture` stops Mute Cue from launching USBPcapCMD.exe and initiating packet capture. It **does not unload or uninstall the USBPcap kernel filter driver**. If Event Viewer or Javelin names a USBPcap driver, handle that separately through official driver update/removal guidance, then reboot. Do not alter EA Javelin or game protections.
+
+### Diagnose the remaining multi-second delay
+
+The USB-free fallback still takes about four seconds on the user's BEACN hardware even after increasing the read cadence. Instead of increasing polling again, Dev now offers an **opt-in, local-only** timing trace:
+
+```powershell
+Set-Location "$HOME\Mute-Cue-Javelin-Test"
+git pull --ff-only
+& ".\Build and Launch Mute Cue Dev.cmd" --dev-no-usb-capture --dev-fast-beacn-fallback --dev-beacn-timing
+```
+
+Exit the prior Dev process from its tray icon before running this. **Keep Apex closed.**
+
+1. In the BEACN app, leave the mixer window visibly open, and mute/unmute the same fader with the physical knob or Mute to Audience button. Note the approximate delay.
+2. Move BEACN behind another ordinary application or minimize it, and repeat with the same controls. Note whether it becomes slower.
+3. Press your BEACN keyboard hotkey once and check whether that remains immediate. Stop the Dev app after testing.
+4. In PowerShell, display the recorded timeline:
+
+```powershell
+Import-Csv "$env:LOCALAPPDATA\MuteCue-Dev\Diagnostics\beacn-timing.csv" |
+  Select-Object -Last 90 | Format-Table -AutoSize -Wrap
+```
+
+The output records UI Automation event notifications, when the polling request was queued, how long BEACN's read took, confirmed mute-state changes, the overlay transition, and scanner performance. Compare the timestamps to determine whether the delay originates before the accessibility event, during the scan/read, or after state publication. BEACN user-defined **fader names** may appear; review/redact names before sharing. The trace **does not** record microphone audio, USB packets, Discord tokens, or game information. It overwrites the preceding diagnostic file at startup and stops growing after about 256 KiB. It is off by default, exists only in Dev, and cannot be enabled in Stable.
+
+This diagnostic trace is not a fix and does not promise compatibility with Javelin. No Apex testing is needed to characterize the four-second BEACN delay.
 
 ## Controlled test sequence
 
