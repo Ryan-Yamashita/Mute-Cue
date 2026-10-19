@@ -86,6 +86,22 @@ try
         ["--dev-no-usb-capture", "--dev-fast-beacn-fallback", "--dev-beacn-timing",
          "--dev-beacn-win-events", "--dev-beacn-output-probe"], isDevelopment: false).EnableBeacnOutputProbe,
         "Stable must ignore the optional BEACN output-probe diagnostics.");
+    var eventRefresh = CompatibilityDiagnostics.FromArguments(
+        ["--dev-no-usb-capture", "--dev-fast-beacn-fallback", "--dev-beacn-timing",
+         "--dev-beacn-win-events", "--dev-beacn-output-probe", "--dev-beacn-event-refresh"],
+        isDevelopment: true);
+    Assert(eventRefresh.EnableBeacnEventRefresh && eventRefresh.EnableBeacnOutputProbe,
+        "Only the explicit Dev USB-free experiment may prioritize event-driven authoritative reads.");
+    Assert(!CompatibilityDiagnostics.FromArguments(
+        ["--dev-beacn-event-refresh"], isDevelopment: true).EnableBeacnEventRefresh,
+        "Event-driven refresh must not activate without the complete dependency chain.");
+    Assert(!CompatibilityDiagnostics.FromArguments(
+        ["--dev-no-usb-capture", "--dev-fast-beacn-fallback", "--dev-beacn-timing",
+         "--dev-beacn-win-events", "--dev-beacn-output-probe", "--dev-beacn-event-refresh"],
+        isDevelopment: false).EnableBeacnEventRefresh,
+        "Stable must ignore even a fully specified event-refresh experiment.");
+    Assert(!outputProbe.EnableBeacnEventRefresh,
+        "Observation-only output sampling must remain observation-only by default.");
 
     Assert(CompatibilityDiagnostics.FromArguments([], isDevelopment: true) == default, "Normal Dev behavior must remain unchanged.");
     Assert(developmentCompatibility.StatusDescription.Contains("global input hooks", StringComparison.Ordinal), "Diagnostic status must describe active limitations.");
@@ -97,6 +113,8 @@ try
         "Slow UI Automation provider calls must throttle the fallback.");
     Assert(!BeacnAppScanner.AllowsRenderedProbeForMask(3 | 32),
         "Passive USB-free refreshes must not hit-test a foreground game's UI Automation tree.");
+    Assert(!BeacnAppScanner.AllowsRenderedProbeForMask(3 | 16 | 32),
+        "Event-prioritized authoritative verification must not hit-test foreground game windows.");
     Assert(BeacnAppScanner.AllowsRenderedProbeForMask(15 | 32),
         "Explicit hotkey/click requests must retain their existing rendered-probe precedence.");
     Assert(BeacnAppScanner.AllowsRenderedProbeForMask(15),
