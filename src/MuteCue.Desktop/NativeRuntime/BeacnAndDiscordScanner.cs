@@ -192,6 +192,7 @@ namespace BeacnMuteOverlay {
         private static double lastScanMilliseconds;
         private static int actionRefreshRequested = 1;
         private static int pendingWinEventOutputProbe;
+        private static int enableEventPrioritizedRefresh;
         private static DateTime lastWinEventOutputProbeUtc = DateTime.MinValue;
         private static int nextWinEventOutputProbeIndex;
         private static int discoveryRequested;
@@ -354,6 +355,7 @@ namespace BeacnMuteOverlay {
             recentAudienceOutputEdges.Clear();
             Interlocked.Exchange(ref actionRefreshRequested, 0);
             Interlocked.Exchange(ref pendingWinEventOutputProbe, 0);
+            Volatile.Write(ref enableEventPrioritizedRefresh, 0);
             lastWinEventOutputProbeUtc = DateTime.MinValue;
             nextWinEventOutputProbeIndex = 0;
             Interlocked.Exchange(ref discoveryRequested, 0);
@@ -363,8 +365,13 @@ namespace BeacnMuteOverlay {
 
         // Dev-only, read-only feasibility test. Coalesce BEACN value-change
         // notifications; expensive UIA reads happen later on the scanner worker.
+        public static void ConfigureEventPrioritizedRefresh(bool enabled) {
+            Volatile.Write(ref enableEventPrioritizedRefresh, enabled ? 1 : 0);
+        }
+
         public static void RequestWinEventOutputProbe() {
             Interlocked.Exchange(ref pendingWinEventOutputProbe, 1);
+            Interlocked.Exchange(ref actionRefreshRequested, 1);
         }
 
         public static void RequestDiscovery() {
@@ -405,13 +412,16 @@ namespace BeacnMuteOverlay {
         // refresh reads the cached BEACN subtree, never a foreground window hit-test.
         public static void RequestPassiveFaderRefresh(string name) {
             if (String.IsNullOrWhiteSpace(name)) return;
-            QueueUrgentFaderRefresh(name, PassiveSubtreeOnlyRefreshMask | 3);
+            // Periodic reconciliation is background work. Named output-edge and
+            // physical hotkey events must get priority over the next round-robin read.
+            QueueFaderRefresh(name, PassiveSubtreeOnlyRefreshMask | 3);
         }
 
         internal static bool AllowsRenderedProbeForMask(int mask) {
             // An explicit rendered refresh (e.g., actual hotkey/click) overrides
             // a simultaneously queued passive request for the same fader.
-            return (mask & PassiveSubtreeOnlyRefreshMask) == 0 || (mask & 28) != 0;
+            // The follow-up-required flag (16) alone must not enable hit testing.
+            return (mask & PassiveSubtreeOnlyRefreshMask) == 0 || (mask & 12) != 0;
         }
 
         public static void RequestHardwareRefresh(string preferredName, string mode, int position, long requestId, long mappingGeneration, bool mappingConfident) {
@@ -890,6 +900,14 @@ namespace BeacnMuteOverlay {
                 // stable fader layout. Refresh only their small accessibility subset
                 // on every monitor cycle instead of waiting for full rediscovery.
                 if (!geometrySettling && trackedFaders.Count > 0) {
+                    // In event-driven Dev tests, sample the cheap BEACN output
+                    // toggles before choosing a slower authoritative action-row read.
+                    // Do not delay an already queued keyboard/click request.
+                    if (Volatile.Read(ref enableEventPrioritizedRefresh) != 0 &&
+                        pendingUrgentActionRefreshes.IsEmpty) {
+                        MaybeProbeCachedOutputToggleStates();
+                    }
+
                     // Exact-name work (hotkeys and resolved desktop clicks) must be
                     // able to interrupt a page-recovery walk. This keeps one stale
                     // hardware mapping from monopolizing several expensive scans.
@@ -980,17 +998,13 @@ namespace BeacnMuteOverlay {
                     }
                 }
 
-                // Opt-in Dev experiment: determine whether cached BEACN output
-                // toggle controls identify the changed fader faster than reading
-                // all seven independent action-row subtrees. Never trusts these
-                // readouts to draw the mute indicator or infer an action mode.
+                // In observation-only Dev runs, preserve the previous low
+                // priority diagnostic position. Only the explicit new event-refresh
+                // flag promotes output-edge checks before background reconciliation.
                 if (!geometrySettling &&
                     trackedFaders.Count > 0 &&
-                    Volatile.Read(ref pendingWinEventOutputProbe) != 0 &&
-                    (DateTime.UtcNow - lastWinEventOutputProbeUtc).TotalMilliseconds >= 500 &&
-                    Interlocked.Exchange(ref pendingWinEventOutputProbe, 0) != 0) {
-                    lastWinEventOutputProbeUtc = DateTime.UtcNow;
-                    ProbeCachedOutputToggleStates();
+                    Volatile.Read(ref enableEventPrioritizedRefresh) == 0) {
+                    MaybeProbeCachedOutputToggleStates();
                 }
 
                 ObserveNativeWindowGeometry(DateTime.UtcNow);
@@ -2104,6 +2118,19 @@ namespace BeacnMuteOverlay {
             return selected;
         }
 
+        private static void MaybeProbeCachedOutputToggleStates() {
+            int prioritized = Volatile.Read(ref enableEventPrioritizedRefresh);
+            int cooldownMilliseconds = prioritized != 0 ? 100 : 500;
+            if (Volatile.Read(ref pendingWinEventOutputProbe) == 0 ||
+                (DateTime.UtcNow - lastWinEventOutputProbeUtc).TotalMilliseconds < cooldownMilliseconds ||
+                Interlocked.Exchange(ref pendingWinEventOutputProbe, 0) == 0) {
+                return;
+            }
+
+            lastWinEventOutputProbeUtc = DateTime.UtcNow;
+            ProbeCachedOutputToggleStates();
+        }
+
         private static void ProbeCachedOutputToggleStates() {
             List<TrackedFader> snapshot = trackedFaders;
             if (snapshot.Count == 0) return;
@@ -2120,6 +2147,7 @@ namespace BeacnMuteOverlay {
 
                 TrackedFader fader = snapshot[(start + offset) % snapshot.Count];
                 Stopwatch faderTimer = Stopwatch.StartNew();
+                bool faderChanged = false;
                 bool current;
                 if (TryGetToggleState(fader.PersonalButton, out current)) {
                     knownToggleReads++;
@@ -2127,6 +2155,7 @@ namespace BeacnMuteOverlay {
                         ? fader.OutputProbePersonalMuted : fader.PersonalMuted;
                     if (current != previous) {
                         changes++;
+                        faderChanged = true;
                         BeacnTimingTrace.Record("output-edge", fader.Name,
                             String.Format("Personal {0}->{1}", previous, current));
                     }
@@ -2139,11 +2168,21 @@ namespace BeacnMuteOverlay {
                         ? fader.OutputProbeAudienceMuted : fader.AudienceMuted;
                     if (current != previous) {
                         changes++;
+                        faderChanged = true;
                         BeacnTimingTrace.Record("output-edge", fader.Name,
                             String.Format("Audience {0}->{1}", previous, current));
                     }
                     fader.OutputProbeAudienceMuted = current;
                     fader.OutputProbeAudienceInitialized = true;
+                }
+                if (faderChanged && Volatile.Read(ref enableEventPrioritizedRefresh) != 0) {
+                    // The output toggles identify which fader changed, NOT whether
+                    // All or Audience is the active mode. Confirm both from BEACN's
+                    // authoritative action rows. One additional read is required
+                    // because JUCE may publish its output bit before updating the row.
+                    QueueUrgentFaderRefresh(fader.Name, PassiveSubtreeOnlyRefreshMask | 3 | 16);
+                    BeacnTimingTrace.Record("event-verify-queued", fader.Name,
+                        "priority All+Audience; authoritative confirmation pending");
                 }
                 faderTimer.Stop();
                 BeacnTimingTrace.Record("output-probe-fader", fader.Name,
