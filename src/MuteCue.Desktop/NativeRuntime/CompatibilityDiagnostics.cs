@@ -13,7 +13,8 @@ internal readonly record struct CompatibilityDiagnostics(
     bool DisableOverlay,
     bool EnableFastBeacnFallback = false,
     bool EnableBeacnTiming = false,
-    bool EnableBeacnWinEvents = false)
+    bool EnableBeacnWinEvents = false,
+    bool EnableBeacnOutputProbe = false)
 {
     internal static CompatibilityDiagnostics FromArguments(IEnumerable<string> arguments, bool isDevelopment)
     {
@@ -35,7 +36,12 @@ internal readonly record struct CompatibilityDiagnostics(
             EnableBeacnWinEvents: switches.Contains("--dev-no-usb-capture") &&
                 switches.Contains("--dev-fast-beacn-fallback") &&
                 switches.Contains("--dev-beacn-timing") &&
-                switches.Contains("--dev-beacn-win-events"));
+                switches.Contains("--dev-beacn-win-events"),
+            EnableBeacnOutputProbe: switches.Contains("--dev-no-usb-capture") &&
+                switches.Contains("--dev-fast-beacn-fallback") &&
+                switches.Contains("--dev-beacn-timing") &&
+                switches.Contains("--dev-beacn-win-events") &&
+                switches.Contains("--dev-beacn-output-probe"));
     }
 
     internal string StatusDescription
@@ -49,6 +55,7 @@ internal readonly record struct CompatibilityDiagnostics(
             if (EnableFastBeacnFallback) disabled.Add("USB-free BEACN fallback enabled");
             if (EnableBeacnTiming) disabled.Add("BEACN timing trace enabled");
             if (EnableBeacnWinEvents) disabled.Add("BEACN Windows-event diagnostic enabled");
+            if (EnableBeacnOutputProbe) disabled.Add("BEACN output-edge feasibility probe enabled");
 
             return disabled.Count == 0
                 ? string.Empty
