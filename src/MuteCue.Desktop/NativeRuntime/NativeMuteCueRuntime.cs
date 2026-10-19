@@ -162,6 +162,11 @@ public sealed class NativeMuteCueRuntime : IDisposable
         if (_disposed) return;
         CompleteScans();
         _ = _beacnWinEventProbe?.EnsureStarted();
+        if (_compatibility.EnableBeacnOutputProbe &&
+            _beacnWinEventProbe?.TryConsumeValueSignal() == true)
+        {
+            BeacnAppScanner.RequestWinEventOutputProbe();
+        }
         ProcessHardwareResult();
         CompleteUsbRouteDiscovery();
         ReloadHotkeyMappings(force: false);
