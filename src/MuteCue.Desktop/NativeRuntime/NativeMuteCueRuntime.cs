@@ -86,6 +86,7 @@ public sealed class NativeMuteCueRuntime : IDisposable
             _ = _beacnWinEventProbe.EnsureStarted();
         }
         ConfigureBeacnScanner();
+        BeacnAppScanner.ConfigureEventPrioritizedRefresh(_compatibility.EnableBeacnEventRefresh);
         if (!_compatibility.DisableGlobalHooks)
         {
             KeyboardInput.StartMouseListener();
