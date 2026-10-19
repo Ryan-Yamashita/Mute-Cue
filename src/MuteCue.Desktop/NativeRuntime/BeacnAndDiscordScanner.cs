@@ -2135,6 +2135,10 @@ namespace BeacnMuteOverlay {
             List<TrackedFader> snapshot = trackedFaders;
             if (snapshot.Count == 0) return;
             Stopwatch timer = Stopwatch.StartNew();
+            // On event-driven Dev runs, the known-fast output read gets a
+            // tighter budget than the observational baseline. If BEACN becomes
+            // slow, use background reconciliation rather than stall the worker.
+            int budgetMilliseconds = Volatile.Read(ref enableEventPrioritizedRefresh) != 0 ? 75 : 900;
             int start = nextWinEventOutputProbeIndex % snapshot.Count;
             int visited = 0;
             int knownToggleReads = 0;
@@ -2143,7 +2147,7 @@ namespace BeacnMuteOverlay {
             // Bound one BEACN-only diagnostic pass to avoid monopolizing the UIA
             // worker. The next event resumes at the next unvisited fader.
             for (int offset = 0; offset < snapshot.Count; offset++) {
-                if (offset > 0 && timer.ElapsedMilliseconds >= 900) break;
+                if (offset > 0 && timer.ElapsedMilliseconds >= budgetMilliseconds) break;
 
                 TrackedFader fader = snapshot[(start + offset) % snapshot.Count];
                 Stopwatch faderTimer = Stopwatch.StartNew();
