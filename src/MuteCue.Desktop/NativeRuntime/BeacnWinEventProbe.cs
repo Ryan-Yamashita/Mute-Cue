@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Threading;
 
 namespace MuteCue.Desktop.NativeRuntime;
 
@@ -49,6 +50,7 @@ internal sealed class BeacnWinEventProbe : IDisposable
     private DateTime _lastAttemptUtc = DateTime.MinValue;
     private DateTime _lastProcessCheckUtc = DateTime.MinValue;
     private bool _disposed;
+    private int _pendingValueSignal;
 
     internal BeacnWinEventProbe()
     {
@@ -159,6 +161,10 @@ internal sealed class BeacnWinEventProbe : IDisposable
         }
     }
 
+    // Coalesces bursts; there is never more than one pending request. The worker
+    // reads BEACN controls later, outside the WinEvent callback.
+    internal bool TryConsumeValueSignal() => Interlocked.Exchange(ref _pendingValueSignal, 0) != 0;
+
     internal static string? EventLabel(uint eventType) => eventType switch
     {
         EventObjectReorder => "reorder",
@@ -185,6 +191,10 @@ internal sealed class BeacnWinEventProbe : IDisposable
         if (!_disposed && label is not null)
         {
             BeacnTimingTrace.Record("win-event", "", $"{label};object={objectId};child={childId}");
+            if (eventType == EventObjectValueChange)
+            {
+                Interlocked.Exchange(ref _pendingValueSignal, 1);
+            }
         }
     }
 
@@ -197,6 +207,7 @@ internal sealed class BeacnWinEventProbe : IDisposable
         }
 
         _processId = 0;
+        Interlocked.Exchange(ref _pendingValueSignal, 0);
     }
 
     public void Dispose()
