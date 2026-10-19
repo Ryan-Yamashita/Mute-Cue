@@ -94,6 +94,49 @@ Import-Csv "$env:LOCALAPPDATA\MuteCue-Dev\Diagnostics\beacn-timing.csv" |
 
 An event row tagged `win-event` is evidence of an accessibility event but **not proof it identifies the particular fader, mode, or final mute state**. If no relevant event is emitted by the BEACN App, this route cannot provide a reliable hardware trigger. Do not implement event-triggered state updates until the identity and event reliability are established. The event hook is for BEACN only, but anti-cheat compatibility is not guaranteed: **do not test this probe with Apex running**.
 
+### Check whether BEACN exposes a fast, fader-specific output edge
+
+The first Windows event test **successfully recorded** BEACN-process-scoped
+`value` notifications near physical Mic and System mute transitions. The
+`object=N` identifiers increased across events; they do **not** prove a
+stable identity for the affected fader.
+
+For a safer next experiment, one more opt-in Dev flag asks the existing scanner
+worker to sample **cached BEACN output-toggle controls** when a value event
+arrives. It is observational: the sampled values are recorded **only for
+diagnostics** and cannot alter the overlay, invoke mute/unmute, or infer
+independent All/Audience state. It does not open or intercept USB traffic.
+One pass is rate-limited/coalesced and stops after approximately 900 ms of
+elapsed provider calls; a single blocking Windows accessibility call cannot be
+forcibly interrupted.
+
+With Apex closed, exit Dev from the tray and run:
+
+```powershell
+Set-Location "$HOME\Mute-Cue-Javelin-Test"
+git pull --ff-only
+& ".\Build and Launch Mute Cue Dev.cmd" --dev-no-usb-capture --dev-fast-beacn-fallback --dev-beacn-timing --dev-beacn-win-events --dev-beacn-output-probe
+```
+
+With BEACN visible, mute/unmute **Mic**, then **System**, then use a
+**Mute to Audience** button; repeat with the BEACN window behind another
+ordinary application. Close Dev. Inspect the timestamped diagnostic:
+
+```powershell
+Import-Csv "$env:LOCALAPPDATA\MuteCue-Dev\Diagnostics\beacn-timing.csv" |
+  Where-Object { $_.event -in @('win-hook','win-event','output-edge','output-probe-summary','observed-state') } |
+  Select-Object -Last 100 | Format-Table -AutoSize -Wrap
+```
+
+An `output-edge` row naming a fader would indicate that BEACN's *cached*
+personal/audience output toggle controls can identify that fader without
+reading every All/Audience action row. `output-probe-summary` reports how
+many controls were read, whether any changed, and the time spent. The next
+design would still need the real All/Audience action rows for authoritative
+confirmation; Windows endpoint mute status is not an adequate substitute.
+This diagnostics-only experiment is **not** a production solution, and must
+not be tested with Apex running. No changes to Stable.
+
 ### Device-interface investigation after the mic-only control
 
 The user confirmed that reducing the Dev fallback to only the Mic fader makes the indicator much faster. With seven faders, the BEACN/JUCE UI Automation subtree read takes approximately 325–436 ms per fader and Mute Cue checks the selected faders serially. Repeatedly increasing polling cadence is unlikely to solve all-seven-fader responsiveness.
