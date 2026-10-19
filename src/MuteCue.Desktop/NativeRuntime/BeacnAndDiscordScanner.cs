@@ -112,6 +112,10 @@ namespace BeacnMuteOverlay {
             public long ActionRevision;
             public bool PersonalMuted;
             public bool AudienceMuted;
+            public bool OutputProbePersonalInitialized;
+            public bool OutputProbePersonalMuted;
+            public bool OutputProbeAudienceInitialized;
+            public bool OutputProbeAudienceMuted;
             public bool IsLocked;
             public AutomationPropertyChangedEventHandler PersonalChangedHandler;
             public AutomationPropertyChangedEventHandler AudienceChangedHandler;
@@ -187,6 +191,9 @@ namespace BeacnMuteOverlay {
         private static string lastDiagnostic = "not scanned";
         private static double lastScanMilliseconds;
         private static int actionRefreshRequested = 1;
+        private static int pendingWinEventOutputProbe;
+        private static DateTime lastWinEventOutputProbeUtc = DateTime.MinValue;
+        private static int nextWinEventOutputProbeIndex;
         private static int discoveryRequested;
         private static int geometryRefreshRequested;
         private static int geometryRefreshIndex = -1;
@@ -346,9 +353,18 @@ namespace BeacnMuteOverlay {
             recentPersonalOutputEdges.Clear();
             recentAudienceOutputEdges.Clear();
             Interlocked.Exchange(ref actionRefreshRequested, 0);
+            Interlocked.Exchange(ref pendingWinEventOutputProbe, 0);
+            lastWinEventOutputProbeUtc = DateTime.MinValue;
+            nextWinEventOutputProbeIndex = 0;
             Interlocked.Exchange(ref discoveryRequested, 0);
             Interlocked.Exchange(ref geometryRefreshRequested, 0);
             Interlocked.Exchange(ref geometryRefreshIndex, -1);
+        }
+
+        // Dev-only, read-only feasibility test. Coalesce BEACN value-change
+        // notifications; expensive UIA reads happen later on the scanner worker.
+        public static void RequestWinEventOutputProbe() {
+            Interlocked.Exchange(ref pendingWinEventOutputProbe, 1);
         }
 
         public static void RequestDiscovery() {
@@ -962,6 +978,19 @@ namespace BeacnMuteOverlay {
                     } else if (refreshRequested) {
                         lastActionRefresh = now;
                     }
+                }
+
+                // Opt-in Dev experiment: determine whether cached BEACN output
+                // toggle controls identify the changed fader faster than reading
+                // all seven independent action-row subtrees. Never trusts these
+                // readouts to draw the mute indicator or infer an action mode.
+                if (!geometrySettling &&
+                    trackedFaders.Count > 0 &&
+                    Volatile.Read(ref pendingWinEventOutputProbe) != 0 &&
+                    (DateTime.UtcNow - lastWinEventOutputProbeUtc).TotalMilliseconds >= 500 &&
+                    Interlocked.Exchange(ref pendingWinEventOutputProbe, 0) != 0) {
+                    lastWinEventOutputProbeUtc = DateTime.UtcNow;
+                    ProbeCachedOutputToggleStates();
                 }
 
                 ObserveNativeWindowGeometry(DateTime.UtcNow);
@@ -2073,6 +2102,60 @@ namespace BeacnMuteOverlay {
                 selected = index;
             }
             return selected;
+        }
+
+        private static void ProbeCachedOutputToggleStates() {
+            List<TrackedFader> snapshot = trackedFaders;
+            if (snapshot.Count == 0) return;
+            Stopwatch timer = Stopwatch.StartNew();
+            int start = nextWinEventOutputProbeIndex % snapshot.Count;
+            int visited = 0;
+            int knownToggleReads = 0;
+            int changes = 0;
+
+            // Bound one BEACN-only diagnostic pass to avoid monopolizing the UIA
+            // worker. The next event resumes at the next unvisited fader.
+            for (int offset = 0; offset < snapshot.Count; offset++) {
+                if (offset > 0 && timer.ElapsedMilliseconds >= 900) break;
+
+                TrackedFader fader = snapshot[(start + offset) % snapshot.Count];
+                Stopwatch faderTimer = Stopwatch.StartNew();
+                bool current;
+                if (TryGetToggleState(fader.PersonalButton, out current)) {
+                    knownToggleReads++;
+                    bool previous = fader.OutputProbePersonalInitialized
+                        ? fader.OutputProbePersonalMuted : fader.PersonalMuted;
+                    if (current != previous) {
+                        changes++;
+                        BeacnTimingTrace.Record("output-edge", fader.Name,
+                            String.Format("Personal {0}->{1}", previous, current));
+                    }
+                    fader.OutputProbePersonalMuted = current;
+                    fader.OutputProbePersonalInitialized = true;
+                }
+                if (TryGetToggleState(fader.AudienceButton, out current)) {
+                    knownToggleReads++;
+                    bool previous = fader.OutputProbeAudienceInitialized
+                        ? fader.OutputProbeAudienceMuted : fader.AudienceMuted;
+                    if (current != previous) {
+                        changes++;
+                        BeacnTimingTrace.Record("output-edge", fader.Name,
+                            String.Format("Audience {0}->{1}", previous, current));
+                    }
+                    fader.OutputProbeAudienceMuted = current;
+                    fader.OutputProbeAudienceInitialized = true;
+                }
+                faderTimer.Stop();
+                BeacnTimingTrace.Record("output-probe-fader", fader.Name,
+                    String.Format("ms={0:0}", faderTimer.Elapsed.TotalMilliseconds));
+                visited++;
+            }
+
+            nextWinEventOutputProbeIndex = (start + visited) % snapshot.Count;
+            timer.Stop();
+            BeacnTimingTrace.Record("output-probe-summary", String.Empty,
+                String.Format("checked={0}/{1};toggleReads={2};edges={3};ms={4:0}",
+                    visited, snapshot.Count, knownToggleReads, changes, timer.Elapsed.TotalMilliseconds));
         }
 
         private static TrackedFader FindUniqueOutputChange(int mask) {
