@@ -137,6 +137,59 @@ confirmation; Windows endpoint mute status is not an adequate substitute.
 This diagnostics-only experiment is **not** a production solution, and must
 not be tested with Apex running. No changes to Stable.
 
+### Event-prioritized authoritative mute verification (Dev experiment)
+
+The latest user hardware test confirmed the `output-edge` diagnostic identified
+**Mic, System, and Link In**, including changes induced by both physical
+**Mute to All** and **Mute to Audience** controls. Sampling all seven faders
+typically took 2–6 ms (one sample took 45 ms), but normal round-robin action
+verification still sometimes delayed the overlay by 2–3 seconds.
+
+The new **`--dev-beacn-event-refresh`** flag activates a narrow optimization:
+after a BEACN-only Windows accessibility value notification, read the
+cached, fast personal/audience output controls to identify the changed fader.
+Give **that named fader** priority for a *BEACN action-row read of both mute modes*
+instead of waiting through seven periodic reads. An independent follow-up read
+allows JUCE's action rows time to settle. The background round-robin scan remains
+enabled to reconcile missed events and unknown states, but is lower priority.
+
+The output-toggle values **do not decide the overlay**; only BEACN's authoritative
+Mute to All/Audience action rows do. This optimization never injects into BEACN,
+never opens any game/USB process, and doesn't change the user's actual mute states.
+
+Exit **Mute Cue Dev** from the system tray, close Apex, then run:
+
+```powershell
+Set-Location "$HOME\Mute-Cue-Javelin-Test"
+git pull --ff-only
+& ".\Build and Launch Mute Cue Dev.cmd" --dev-no-usb-capture --dev-fast-beacn-fallback --dev-beacn-timing --dev-beacn-win-events --dev-beacn-output-probe --dev-beacn-event-refresh
+```
+
+Enable the same seven faders in **Mute Cue Dev** again if they were disabled
+during the Mic-only bottleneck test. BEACN's own mixer settings are unchanged.
+
+With BEACN visible, mute/unmute Mic, System, and Link In with physical knobs,
+including Mute to Audience. Repeat with BEACN behind a normal window. Check
+whether the indicator appears and disappears correctly, and estimate delay.
+The event probe is only process-scoped to BEACN, but **do not run Apex** during
+this initial validation.
+
+After exiting Dev, inspect the logs:
+
+```powershell
+Import-Csv "$env:LOCALAPPDATA\MuteCue-Dev\Diagnostics\beacn-timing.csv" |
+    Where-Object { $_.event -in @('win-event','output-edge','output-probe-summary','event-verify-queued','probe-finished','observed-state','overlay') } |
+    Select-Object -Last 100 | Format-Table -AutoSize -Wrap
+```
+
+If the log shows a fast `output-edge`, followed by `event-verify-queued`,
+then a prompt `probe-finished` and the correct `observed-state`, event-driven
+prioritization has been confirmed on the hardware. If it misses a mode, displays
+the wrong fader, or lags, leave the draft PR unmerged and investigate. The
+event-triggered read's background provider call can still block in BEACN; the
+75 ms per-pass output sampler budget is soft and cannot interrupt an individual
+Windows accessibility API call. This is **not yet a verified Apex fix**.
+
 ### Device-interface investigation after the mic-only control
 
 The user confirmed that reducing the Dev fallback to only the Mic fader makes the indicator much faster. With seven faders, the BEACN/JUCE UI Automation subtree read takes approximately 325–436 ms per fader and Mute Cue checks the selected faders serially. Repeatedly increasing polling cadence is unlikely to solve all-seven-fader responsiveness.
