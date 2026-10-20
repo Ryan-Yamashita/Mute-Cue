@@ -153,6 +153,17 @@ instead of waiting through seven periodic reads. An independent follow-up read
 allows JUCE's action rows time to settle. The background round-robin scan remains
 enabled to reconcile missed events and unknown states, but is lower priority.
 
+In the event-prioritized Dev mode only, the fallback's periodic UIA action-row
+reconciliation now checks one selected fader **no more frequently than about
+every 1.5 seconds** when no urgent verification is in progress. Previously it
+could keep the accessibility worker almost continuously busy with ~300–390 ms
+reads. BEACN-specific events still request immediate targeted, authoritative
+verification; periodic reads are a lower-priority safeguard against missed
+notifications. With seven faders, a completely missed event may take roughly
+10 seconds or more to reconcile, so test both correctness and recovery before
+shipping. This is an explicit **CPU/gaming-stability tradeoff**, not proof of
+Javelin compatibility. Ordinary Dev behavior and Stable remain unchanged.
+
 The output-toggle values **do not decide the overlay**; only BEACN's authoritative
 Mute to All/Audience action rows do. This optimization never injects into BEACN,
 never opens any game/USB process, and doesn't change the user's actual mute states.
