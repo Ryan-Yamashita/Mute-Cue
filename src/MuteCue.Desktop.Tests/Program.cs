@@ -111,6 +111,12 @@ try
         "A single selected source must remain bounded rather than polling constantly.");
     Assert(Math.Abs(NativeMuteCueRuntime.CalculateUsbFreeFallbackIntervalMilliseconds(8, 300d) - 500d) < 0.01,
         "Slow UI Automation provider calls must throttle the fallback.");
+    Assert(Math.Abs(NativeMuteCueRuntime.CalculateUsbFreeFallbackIntervalMilliseconds(7, 350d, eventPrioritized: true) - 1500d) < 0.01,
+        "Event-prioritized Dev must back off background UI Automation reconciliation.");
+    Assert(Math.Abs(NativeMuteCueRuntime.CalculateUsbFreeFallbackIntervalMilliseconds(1, 0d, eventPrioritized: true) - 1500d) < 0.01,
+        "Single-fader Dev event mode must also avoid unnecessary background polling.");
+    Assert(Math.Abs(NativeMuteCueRuntime.CalculateUsbFreeFallbackIntervalMilliseconds(7, 350d, eventPrioritized: false) - 500d) < 0.01,
+        "Existing USB-free Dev fallback behavior must remain unchanged without the event flag.");
     Assert(!BeacnAppScanner.AllowsRenderedProbeForMask(3 | 32),
         "Passive USB-free refreshes must not hit-test a foreground game's UI Automation tree.");
     Assert(!BeacnAppScanner.AllowsRenderedProbeForMask(3 | 16 | 32),
