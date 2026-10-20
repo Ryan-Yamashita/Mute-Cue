@@ -75,7 +75,8 @@ public partial class App : System.Windows.Application
         LegacyInstallMigration.CleanupPerUserInstallation();
         var settings = NativeSettingsDocument.Load(AppPaths.SettingsPath);
         StartupRegistrationService.RepairExistingRegistration();
-        _runtime = new NativeMuteCueRuntime(settings);
+        var compatibility = CompatibilityDiagnostics.FromArguments(e.Args, AppChannel.IsDevelopment);
+        _runtime = new NativeMuteCueRuntime(settings, compatibility);
         _runtime.Start();
 
         var startInTray = e.Args.Contains("--startup", StringComparer.OrdinalIgnoreCase) && settings.GetBoolean("StartInSystemTray", false);

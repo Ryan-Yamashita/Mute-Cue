@@ -7,6 +7,7 @@ using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using MuteCue.Desktop.NativeRuntime;
 using System.Windows;
 using System.Windows.Automation;
 using Point = System.Windows.Point;
@@ -111,6 +112,10 @@ namespace BeacnMuteOverlay {
             public long ActionRevision;
             public bool PersonalMuted;
             public bool AudienceMuted;
+            public bool OutputProbePersonalInitialized;
+            public bool OutputProbePersonalMuted;
+            public bool OutputProbeAudienceInitialized;
+            public bool OutputProbeAudienceMuted;
             public bool IsLocked;
             public AutomationPropertyChangedEventHandler PersonalChangedHandler;
             public AutomationPropertyChangedEventHandler AudienceChangedHandler;
@@ -186,6 +191,10 @@ namespace BeacnMuteOverlay {
         private static string lastDiagnostic = "not scanned";
         private static double lastScanMilliseconds;
         private static int actionRefreshRequested = 1;
+        private static int pendingWinEventOutputProbe;
+        private static int enableEventPrioritizedRefresh;
+        private static DateTime lastWinEventOutputProbeUtc = DateTime.MinValue;
+        private static int nextWinEventOutputProbeIndex;
         private static int discoveryRequested;
         private static int geometryRefreshRequested;
         private static int geometryRefreshIndex = -1;
@@ -194,6 +203,9 @@ namespace BeacnMuteOverlay {
         private static readonly ConcurrentDictionary<string, int> pendingUrgentActionRefreshes =
             new ConcurrentDictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private const int MaximumFaderRefreshesPerScan = 1;
+        // Dev-only USB-free requests use cached BEACN accessibility elements without
+        // screen hit-testing, which could otherwise reach a foreground game window.
+        private const int PassiveSubtreeOnlyRefreshMask = 32;
         private static readonly ConcurrentQueue<HardwareRefreshRequest> pendingHardwareRefreshes =
             new ConcurrentQueue<HardwareRefreshRequest>();
         private const int MaximumPendingHardwareRefreshes = 128;
@@ -342,9 +354,24 @@ namespace BeacnMuteOverlay {
             recentPersonalOutputEdges.Clear();
             recentAudienceOutputEdges.Clear();
             Interlocked.Exchange(ref actionRefreshRequested, 0);
+            Interlocked.Exchange(ref pendingWinEventOutputProbe, 0);
+            Volatile.Write(ref enableEventPrioritizedRefresh, 0);
+            lastWinEventOutputProbeUtc = DateTime.MinValue;
+            nextWinEventOutputProbeIndex = 0;
             Interlocked.Exchange(ref discoveryRequested, 0);
             Interlocked.Exchange(ref geometryRefreshRequested, 0);
             Interlocked.Exchange(ref geometryRefreshIndex, -1);
+        }
+
+        // Dev-only, read-only feasibility test. Coalesce BEACN value-change
+        // notifications; expensive UIA reads happen later on the scanner worker.
+        public static void ConfigureEventPrioritizedRefresh(bool enabled) {
+            Volatile.Write(ref enableEventPrioritizedRefresh, enabled ? 1 : 0);
+        }
+
+        public static void RequestWinEventOutputProbe() {
+            Interlocked.Exchange(ref pendingWinEventOutputProbe, 1);
+            Interlocked.Exchange(ref actionRefreshRequested, 1);
         }
 
         public static void RequestDiscovery() {
@@ -379,6 +406,22 @@ namespace BeacnMuteOverlay {
                 ? 5
                 : String.Equals(mode, "Audience", StringComparison.OrdinalIgnoreCase) ? 10 : 15;
             QueueUrgentFaderRefresh(name, mask);
+        }
+
+        // Used only by the explicit Dev USB-free compatibility experiment. The
+        // refresh reads the cached BEACN subtree, never a foreground window hit-test.
+        public static void RequestPassiveFaderRefresh(string name) {
+            if (String.IsNullOrWhiteSpace(name)) return;
+            // Periodic reconciliation is background work. Named output-edge and
+            // physical hotkey events must get priority over the next round-robin read.
+            QueueFaderRefresh(name, PassiveSubtreeOnlyRefreshMask | 3);
+        }
+
+        internal static bool AllowsRenderedProbeForMask(int mask) {
+            // An explicit rendered refresh (e.g., actual hotkey/click) overrides
+            // a simultaneously queued passive request for the same fader.
+            // The follow-up-required flag (16) alone must not enable hit testing.
+            return (mask & PassiveSubtreeOnlyRefreshMask) == 0 || (mask & 12) != 0;
         }
 
         public static void RequestHardwareRefresh(string preferredName, string mode, int position, long requestId, long mappingGeneration, bool mappingConfident) {
@@ -857,6 +900,14 @@ namespace BeacnMuteOverlay {
                 // stable fader layout. Refresh only their small accessibility subset
                 // on every monitor cycle instead of waiting for full rediscovery.
                 if (!geometrySettling && trackedFaders.Count > 0) {
+                    // In event-driven Dev tests, sample the cheap BEACN output
+                    // toggles before choosing a slower authoritative action-row read.
+                    // Do not delay an already queued keyboard/click request.
+                    if (Volatile.Read(ref enableEventPrioritizedRefresh) != 0 &&
+                        pendingUrgentActionRefreshes.IsEmpty) {
+                        MaybeProbeCachedOutputToggleStates();
+                    }
+
                     // Exact-name work (hotkeys and resolved desktop clicks) must be
                     // able to interrupt a page-recovery walk. This keeps one stale
                     // hardware mapping from monopolizing several expensive scans.
@@ -945,6 +996,15 @@ namespace BeacnMuteOverlay {
                     } else if (refreshRequested) {
                         lastActionRefresh = now;
                     }
+                }
+
+                // In observation-only Dev runs, preserve the previous low
+                // priority diagnostic position. Only the explicit new event-refresh
+                // flag promotes output-edge checks before background reconciliation.
+                if (!geometrySettling &&
+                    trackedFaders.Count > 0 &&
+                    Volatile.Read(ref enableEventPrioritizedRefresh) == 0) {
+                    MaybeProbeCachedOutputToggleStates();
                 }
 
                 ObserveNativeWindowGeometry(DateTime.UtcNow);
@@ -1431,6 +1491,7 @@ namespace BeacnMuteOverlay {
                 if (fader.PersonalButton != null) {
                     fader.PersonalChangedHandler = delegate(object sender, AutomationPropertyChangedEventArgs args) {
                         RecordOutputEdge(fader.Name, true);
+                        BeacnTimingTrace.Record("uia-output-event", fader.Name, "All");
                         MarkActionEvent("output " + fader.Name + "/All");
                         RequestFaderRefresh(fader.Name, "All");
                     };
@@ -1446,6 +1507,7 @@ namespace BeacnMuteOverlay {
                 if (fader.AudienceButton != null) {
                     fader.AudienceChangedHandler = delegate(object sender, AutomationPropertyChangedEventArgs args) {
                         RecordOutputEdge(fader.Name, false);
+                        BeacnTimingTrace.Record("uia-output-event", fader.Name, "Audience");
                         MarkActionEvent("output " + fader.Name + "/Audience");
                         RequestFaderRefresh(fader.Name, "Audience");
                     };
@@ -1479,6 +1541,7 @@ namespace BeacnMuteOverlay {
                                 " row " + fader.Name + "/All geometry settling";
                             return;
                         }
+                        BeacnTimingTrace.Record("uia-row-event", fader.Name, "All");
                         MarkActionEvent("row " + fader.Name + "/All " + args.StructureChangeType.ToString());
                         RequestFaderRefresh(fader.Name, "All");
                     };
@@ -1497,6 +1560,7 @@ namespace BeacnMuteOverlay {
                                 " row " + fader.Name + "/Audience geometry settling";
                             return;
                         }
+                        BeacnTimingTrace.Record("uia-row-event", fader.Name, "Audience");
                         MarkActionEvent("row " + fader.Name + "/Audience " + args.StructureChangeType.ToString());
                         RequestFaderRefresh(fader.Name, "Audience");
                     };
@@ -1899,8 +1963,20 @@ namespace BeacnMuteOverlay {
                     if (!requested.TryGetValue(fader.Name, out mask)) continue;
                     matchedNames.Add(fader.Name);
                     bool changed;
-                    if (!TryRefreshFaderAction(fader, mask, out changed)) {
-                        if (RetainActionRefreshUntilNextDiscovery(fader.Name, mask, urgent)) {
+                    long startedAt = BeacnTimingTrace.Enabled ? Stopwatch.GetTimestamp() : 0;
+                    bool readSucceeded = TryRefreshFaderAction(fader, mask, out changed);
+                    if (startedAt != 0)
+                    {
+                        var durationMs = Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds;
+                        BeacnTimingTrace.Record("probe-finished", fader.Name,
+                            $"ms={durationMs:0};mask={mask};ok={readSucceeded};changed={changed};AllKnown={fader.AllActionSeen};AllActive={!fader.AllActionMenuButtonSeen};AudienceKnown={fader.AudienceActionSeen};AudienceActive={!fader.AudienceActionMenuButtonSeen}");
+                    }
+
+                    if (!readSucceeded) {
+                        // Passive probes can legitimately fail while BEACN is behind
+                        // other windows. Do not promote them into costly rediscovery.
+                        if ((mask & PassiveSubtreeOnlyRefreshMask) == 0 &&
+                            RetainActionRefreshUntilNextDiscovery(fader.Name, mask, urgent)) {
                             allSucceeded = false;
                         }
                     } else {
@@ -1931,6 +2007,8 @@ namespace BeacnMuteOverlay {
         private static bool TryRefreshFaderAction(TrackedFader fader, int mask, out bool changed) {
             changed = false;
             bool succeeded = true;
+            bool observed = false;
+            bool passiveProbe = (mask & PassiveSubtreeOnlyRefreshMask) != 0 && !AllowsRenderedProbeForMask(mask);
 
             if ((mask & 1) != 0) {
                 bool wasKnown = fader.AllActionSeen;
@@ -1949,9 +2027,11 @@ namespace BeacnMuteOverlay {
                     ref allRowBounds,
                     ref allProbeBounds,
                     (mask & 4) != 0,
+                    AllowsRenderedProbeForMask(mask),
                     out allMenuButtonSeen
                 );
                 if (allRead) {
+                    observed = true;
                     bool isActive = !allMenuButtonSeen;
                     fader.AllActionBounds = allBounds;
                     fader.AllActionRowBounds = allRowBounds;
@@ -1961,8 +2041,12 @@ namespace BeacnMuteOverlay {
                     fader.AllVerifiedUtc = DateTime.UtcNow;
                     if (wasKnown && wasActive != isActive) changed = true;
                 } else {
-                    fader.AllActionSeen = false;
-                    fader.AllVerifiedUtc = DateTime.UtcNow;
+                    // An occluded BEACN subtree may be temporarily unreadable.
+                    // Passive diagnostics retain the last authoritative result.
+                    if (!passiveProbe) {
+                        fader.AllActionSeen = false;
+                        fader.AllVerifiedUtc = DateTime.UtcNow;
+                    }
                     succeeded = false;
                 }
             }
@@ -1984,9 +2068,11 @@ namespace BeacnMuteOverlay {
                     ref audienceRowBounds,
                     ref audienceProbeBounds,
                     (mask & 8) != 0,
+                    AllowsRenderedProbeForMask(mask),
                     out audienceMenuButtonSeen
                 );
                 if (audienceRead) {
+                    observed = true;
                     bool isActive = !audienceMenuButtonSeen;
                     fader.AudienceActionBounds = audienceBounds;
                     fader.AudienceActionRowBounds = audienceRowBounds;
@@ -1996,16 +2082,18 @@ namespace BeacnMuteOverlay {
                     fader.AudienceVerifiedUtc = DateTime.UtcNow;
                     if (wasKnown && wasActive != isActive) changed = true;
                 } else {
-                    fader.AudienceActionSeen = false;
-                    fader.AudienceVerifiedUtc = DateTime.UtcNow;
+                    if (!passiveProbe) {
+                        fader.AudienceActionSeen = false;
+                        fader.AudienceVerifiedUtc = DateTime.UtcNow;
+                    }
                     succeeded = false;
                 }
             }
 
-            // A failed targeted read is also a real observation: it makes the row
-            // explicitly unknown and must be published. The per-fader revision
-            // prevents cache-only or unrelated reads from confirming this row.
-            if ((mask & 3) != 0) fader.ActionRevision = MarkStateObservation();
+            // An ordinary failed targeted read makes the row unknown and advances
+            // its revision. Passive Dev probes retain cached authority on transient
+            // failure and advance the revision only after a real successful read.
+            if ((mask & 3) != 0 && (!passiveProbe || observed)) fader.ActionRevision = MarkStateObservation();
             return succeeded;
         }
 
@@ -2028,6 +2116,89 @@ namespace BeacnMuteOverlay {
                 selected = index;
             }
             return selected;
+        }
+
+        private static void MaybeProbeCachedOutputToggleStates() {
+            int prioritized = Volatile.Read(ref enableEventPrioritizedRefresh);
+            int cooldownMilliseconds = prioritized != 0 ? 100 : 500;
+            if (Volatile.Read(ref pendingWinEventOutputProbe) == 0 ||
+                (DateTime.UtcNow - lastWinEventOutputProbeUtc).TotalMilliseconds < cooldownMilliseconds ||
+                Interlocked.Exchange(ref pendingWinEventOutputProbe, 0) == 0) {
+                return;
+            }
+
+            lastWinEventOutputProbeUtc = DateTime.UtcNow;
+            ProbeCachedOutputToggleStates();
+        }
+
+        private static void ProbeCachedOutputToggleStates() {
+            List<TrackedFader> snapshot = trackedFaders;
+            if (snapshot.Count == 0) return;
+            Stopwatch timer = Stopwatch.StartNew();
+            // On event-driven Dev runs, the known-fast output read gets a
+            // tighter budget than the observational baseline. If BEACN becomes
+            // slow, use background reconciliation rather than stall the worker.
+            int budgetMilliseconds = Volatile.Read(ref enableEventPrioritizedRefresh) != 0 ? 75 : 900;
+            int start = nextWinEventOutputProbeIndex % snapshot.Count;
+            int visited = 0;
+            int knownToggleReads = 0;
+            int changes = 0;
+
+            // Bound one BEACN-only diagnostic pass to avoid monopolizing the UIA
+            // worker. The next event resumes at the next unvisited fader.
+            for (int offset = 0; offset < snapshot.Count; offset++) {
+                if (offset > 0 && timer.ElapsedMilliseconds >= budgetMilliseconds) break;
+
+                TrackedFader fader = snapshot[(start + offset) % snapshot.Count];
+                Stopwatch faderTimer = Stopwatch.StartNew();
+                bool faderChanged = false;
+                bool current;
+                if (TryGetToggleState(fader.PersonalButton, out current)) {
+                    knownToggleReads++;
+                    bool previous = fader.OutputProbePersonalInitialized
+                        ? fader.OutputProbePersonalMuted : fader.PersonalMuted;
+                    if (current != previous) {
+                        changes++;
+                        faderChanged = true;
+                        BeacnTimingTrace.Record("output-edge", fader.Name,
+                            String.Format("Personal {0}->{1}", previous, current));
+                    }
+                    fader.OutputProbePersonalMuted = current;
+                    fader.OutputProbePersonalInitialized = true;
+                }
+                if (TryGetToggleState(fader.AudienceButton, out current)) {
+                    knownToggleReads++;
+                    bool previous = fader.OutputProbeAudienceInitialized
+                        ? fader.OutputProbeAudienceMuted : fader.AudienceMuted;
+                    if (current != previous) {
+                        changes++;
+                        faderChanged = true;
+                        BeacnTimingTrace.Record("output-edge", fader.Name,
+                            String.Format("Audience {0}->{1}", previous, current));
+                    }
+                    fader.OutputProbeAudienceMuted = current;
+                    fader.OutputProbeAudienceInitialized = true;
+                }
+                if (faderChanged && Volatile.Read(ref enableEventPrioritizedRefresh) != 0) {
+                    // The output toggles identify which fader changed, NOT whether
+                    // All or Audience is the active mode. Confirm both from BEACN's
+                    // authoritative action rows. One additional read is required
+                    // because JUCE may publish its output bit before updating the row.
+                    QueueUrgentFaderRefresh(fader.Name, PassiveSubtreeOnlyRefreshMask | 3 | 16);
+                    BeacnTimingTrace.Record("event-verify-queued", fader.Name,
+                        "priority All+Audience; authoritative confirmation pending");
+                }
+                faderTimer.Stop();
+                BeacnTimingTrace.Record("output-probe-fader", fader.Name,
+                    String.Format("ms={0:0}", faderTimer.Elapsed.TotalMilliseconds));
+                visited++;
+            }
+
+            nextWinEventOutputProbeIndex = (start + visited) % snapshot.Count;
+            timer.Stop();
+            BeacnTimingTrace.Record("output-probe-summary", String.Empty,
+                String.Format("checked={0}/{1};toggleReads={2};edges={3};ms={4:0}",
+                    visited, snapshot.Count, knownToggleReads, changes, timer.Elapsed.TotalMilliseconds));
         }
 
         private static TrackedFader FindUniqueOutputChange(int mask) {
@@ -2295,6 +2466,7 @@ namespace BeacnMuteOverlay {
             ref Rect rowBounds,
             ref Rect probeBounds,
             bool forceRenderedProbe,
+            bool allowRenderedHitTesting,
             out bool menuButtonSeen
         ) {
             menuButtonSeen = false;
@@ -2340,6 +2512,7 @@ namespace BeacnMuteOverlay {
             bool hitTestMenuButtonSeen;
             bool cursorInsideRow = IsCursorInside(rowBounds);
             if (
+                allowRenderedHitTesting &&
                 (forceRenderedProbe || cursorInsideRow) &&
                 TryHitTestActionMenu(probeBounds, rowBounds, bounds, processId, out hitTestMenuButtonSeen)
             ) {
@@ -2370,6 +2543,7 @@ namespace BeacnMuteOverlay {
                 return true;
             }
             if (
+                allowRenderedHitTesting &&
                 !cursorInsideRow &&
                 TryHitTestActionMenu(probeBounds, rowBounds, bounds, processId, out hitTestMenuButtonSeen)
             ) {

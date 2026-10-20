@@ -24,6 +24,112 @@ try
     Assert(!WindowCloseBehavior.ShouldHideToTray(closeToSystemTray: true, explicitExitRequested: true), "Tray Exit must always bypass close-to-tray behavior.");
     Assert(AppPaths.DataDirectory.EndsWith(AppChannel.DataDirectoryName, StringComparison.OrdinalIgnoreCase), "Application paths must use the compiled channel identity.");
     Assert(AppPaths.DiscordAuthorizationPath.StartsWith(AppPaths.DataDirectory, StringComparison.OrdinalIgnoreCase), "Discord authorization must remain inside the current channel's data directory.");
+    var compatibilityFlags = new[]
+    {
+        "--dev-no-global-hooks",
+        "--DEV-NO-USB-CAPTURE",
+        "--dev-no-overlay",
+    };
+    var stableCompatibility = CompatibilityDiagnostics.FromArguments(compatibilityFlags, isDevelopment: false);
+    Assert(stableCompatibility == default, "Stable must ignore all development compatibility switches.");
+    var developmentCompatibility = CompatibilityDiagnostics.FromArguments(compatibilityFlags, isDevelopment: true);
+    Assert(developmentCompatibility.DisableGlobalHooks && developmentCompatibility.DisableUsbCapture && developmentCompatibility.DisableOverlay, "Development switches must independently disable hooks, USB capture, and overlay.");
+    Assert(CompatibilityDiagnostics.FromArguments(["--dev-no-usb-capture"], isDevelopment: true) == new CompatibilityDiagnostics(false, true, false), "Disabling only USB capture must keep other components enabled.");
+    Assert(CompatibilityDiagnostics.FromArguments(["--dev-fast-beacn-fallback"], isDevelopment: true) == default,
+        "The fallback switch must have no effect unless Dev USB capture is also disabled.");
+    var usbFreeFallback = CompatibilityDiagnostics.FromArguments(
+        ["--dev-no-usb-capture", "--dev-fast-beacn-fallback"], isDevelopment: true);
+    Assert(usbFreeFallback.DisableUsbCapture && usbFreeFallback.EnableFastBeacnFallback,
+        "The explicit Dev USB-free fallback must leave capture disabled and activate bounded reconciliation.");
+    Assert(!CompatibilityDiagnostics.FromArguments(
+        ["--dev-no-usb-capture", "--dev-fast-beacn-fallback"], isDevelopment: false).EnableFastBeacnFallback,
+        "Stable must ignore the experimental USB-free polling fallback.");
+    var timingEnabled = CompatibilityDiagnostics.FromArguments(
+        ["--dev-no-usb-capture", "--dev-fast-beacn-fallback", "--dev-beacn-timing"],
+        isDevelopment: true);
+    Assert(timingEnabled.EnableBeacnTiming && timingEnabled.EnableFastBeacnFallback,
+        "The timing trace must be available only in the explicit Dev USB-free test.");
+    Assert(!CompatibilityDiagnostics.FromArguments(
+        ["--dev-beacn-timing"], isDevelopment: true).EnableBeacnTiming,
+        "The timing trace must not enable without the other two diagnostic flags.");
+    Assert(!CompatibilityDiagnostics.FromArguments(
+        ["--dev-no-usb-capture", "--dev-fast-beacn-fallback", "--dev-beacn-timing"],
+        isDevelopment: false).EnableBeacnTiming,
+        "Stable must never activate the timing trace.");
+    var beacnEvents = CompatibilityDiagnostics.FromArguments(
+        ["--dev-no-usb-capture", "--dev-fast-beacn-fallback", "--dev-beacn-timing", "--dev-beacn-win-events"],
+        isDevelopment: true);
+    Assert(beacnEvents.EnableBeacnWinEvents && beacnEvents.EnableBeacnTiming,
+        "The BEACN process event probe must be opt-in and enabled only alongside local timing.");
+    Assert(!CompatibilityDiagnostics.FromArguments(
+        ["--dev-beacn-win-events"], isDevelopment: true).EnableBeacnWinEvents,
+        "An isolated event flag must not start accessibility hooks.");
+    Assert(!CompatibilityDiagnostics.FromArguments(
+        ["--dev-no-usb-capture", "--dev-fast-beacn-fallback", "--dev-beacn-timing", "--dev-beacn-win-events"],
+        isDevelopment: false).EnableBeacnWinEvents,
+        "Stable must not create accessibility event hooks even if every diagnostic flag is supplied.");
+    Assert(BeacnWinEventProbe.EventLabel(0x800A) == "state" &&
+        BeacnWinEventProbe.EventLabel(0x800E) == "value" &&
+        BeacnWinEventProbe.EventLabel(0x8013) == "invoke",
+        "The event probe must filter to relevant Windows accessibility notifications.");
+    Assert(BeacnWinEventProbe.EventLabel(0x800B) is null,
+        "High-frequency position notifications must not enter the timing log.");
+    using (var unattachedBeacnListener = new BeacnWinEventProbe())
+    {
+        Assert(!unattachedBeacnListener.IsHookAttached,
+            "An uninitialized BEACN event listener must not suppress normal fallback polling.");
+    }
+    var outputProbe = CompatibilityDiagnostics.FromArguments(
+        ["--dev-no-usb-capture", "--dev-fast-beacn-fallback", "--dev-beacn-timing",
+         "--dev-beacn-win-events", "--dev-beacn-output-probe"], isDevelopment: true);
+    Assert(outputProbe.EnableBeacnOutputProbe && outputProbe.EnableBeacnWinEvents,
+        "The read-only BEACN output sampling must be opt-in and depend on the process-scoped listener.");
+    Assert(!CompatibilityDiagnostics.FromArguments(
+        ["--dev-beacn-output-probe"], isDevelopment: true).EnableBeacnOutputProbe,
+        "An isolated output probe flag must never enable event-driven BEACN reads.");
+    Assert(!CompatibilityDiagnostics.FromArguments(
+        ["--dev-no-usb-capture", "--dev-fast-beacn-fallback", "--dev-beacn-timing",
+         "--dev-beacn-win-events", "--dev-beacn-output-probe"], isDevelopment: false).EnableBeacnOutputProbe,
+        "Stable must ignore the optional BEACN output-probe diagnostics.");
+    var eventRefresh = CompatibilityDiagnostics.FromArguments(
+        ["--dev-no-usb-capture", "--dev-fast-beacn-fallback", "--dev-beacn-timing",
+         "--dev-beacn-win-events", "--dev-beacn-output-probe", "--dev-beacn-event-refresh"],
+        isDevelopment: true);
+    Assert(eventRefresh.EnableBeacnEventRefresh && eventRefresh.EnableBeacnOutputProbe,
+        "Only the explicit Dev USB-free experiment may prioritize event-driven authoritative reads.");
+    Assert(!CompatibilityDiagnostics.FromArguments(
+        ["--dev-beacn-event-refresh"], isDevelopment: true).EnableBeacnEventRefresh,
+        "Event-driven refresh must not activate without the complete dependency chain.");
+    Assert(!CompatibilityDiagnostics.FromArguments(
+        ["--dev-no-usb-capture", "--dev-fast-beacn-fallback", "--dev-beacn-timing",
+         "--dev-beacn-win-events", "--dev-beacn-output-probe", "--dev-beacn-event-refresh"],
+        isDevelopment: false).EnableBeacnEventRefresh,
+        "Stable must ignore even a fully specified event-refresh experiment.");
+    Assert(!outputProbe.EnableBeacnEventRefresh,
+        "Observation-only output sampling must remain observation-only by default.");
+
+    Assert(CompatibilityDiagnostics.FromArguments([], isDevelopment: true) == default, "Normal Dev behavior must remain unchanged.");
+    Assert(developmentCompatibility.StatusDescription.Contains("global input hooks", StringComparison.Ordinal), "Diagnostic status must describe active limitations.");
+    Assert(Math.Abs(NativeMuteCueRuntime.CalculateUsbFreeFallbackIntervalMilliseconds(8, 10d) - 125d) < 0.01,
+        "The USB-free sweep must scale its interval for eight selected sources.");
+    Assert(Math.Abs(NativeMuteCueRuntime.CalculateUsbFreeFallbackIntervalMilliseconds(1, 10d) - 250d) < 0.01,
+        "A single selected source must remain bounded rather than polling constantly.");
+    Assert(Math.Abs(NativeMuteCueRuntime.CalculateUsbFreeFallbackIntervalMilliseconds(8, 300d) - 500d) < 0.01,
+        "Slow UI Automation provider calls must throttle the fallback.");
+    Assert(Math.Abs(NativeMuteCueRuntime.CalculateUsbFreeFallbackIntervalMilliseconds(7, 350d, eventPrioritized: true) - 1500d) < 0.01,
+        "Event-prioritized Dev must back off background UI Automation reconciliation.");
+    Assert(Math.Abs(NativeMuteCueRuntime.CalculateUsbFreeFallbackIntervalMilliseconds(1, 0d, eventPrioritized: true) - 1500d) < 0.01,
+        "Single-fader Dev event mode must also avoid unnecessary background polling.");
+    Assert(Math.Abs(NativeMuteCueRuntime.CalculateUsbFreeFallbackIntervalMilliseconds(7, 350d, eventPrioritized: false) - 500d) < 0.01,
+        "Existing USB-free Dev fallback behavior must remain unchanged without the event flag.");
+    Assert(!BeacnAppScanner.AllowsRenderedProbeForMask(3 | 32),
+        "Passive USB-free refreshes must not hit-test a foreground game's UI Automation tree.");
+    Assert(!BeacnAppScanner.AllowsRenderedProbeForMask(3 | 16 | 32),
+        "Event-prioritized authoritative verification must not hit-test foreground game windows.");
+    Assert(BeacnAppScanner.AllowsRenderedProbeForMask(15 | 32),
+        "Explicit hotkey/click requests must retain their existing rendered-probe precedence.");
+    Assert(BeacnAppScanner.AllowsRenderedProbeForMask(15),
+        "Regular BEACN requests must preserve their original rendered-probe behavior.");
     Assert(NativeMuteCueRuntime.VerifiedAllActionLabels.SequenceEqual(["Knob: Mute to All"]), "The native scanner must use BEACN's verified All action label.");
     Assert(NativeMuteCueRuntime.VerifiedAudienceActionLabels.SequenceEqual(["Mute to Audience"]), "The native scanner must use BEACN's verified Audience action label.");
 

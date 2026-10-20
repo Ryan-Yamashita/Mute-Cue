@@ -26,6 +26,12 @@ jobs:
       - name: Test the Stable native runtime
         shell: powershell
         run: dotnet run --project .\src\MuteCue.Desktop.Tests\MuteCue.Desktop.Tests.csproj --configuration Release --no-build --nologo -p:MuteCueChannel=Stable
+      - name: Build the Dev native runtime
+        shell: powershell
+        run: dotnet build .\src\MuteCue.Desktop.Tests\MuteCue.Desktop.Tests.csproj --configuration Release --nologo -p:MuteCueChannel=Dev
+      - name: Test the Dev native runtime
+        shell: powershell
+        run: dotnet run --project .\src\MuteCue.Desktop.Tests\MuteCue.Desktop.Tests.csproj --configuration Release --no-build --nologo -p:MuteCueChannel=Dev -- --expect-dev
       - name: Run the full Mute Cue test suite
         shell: powershell
         run: .\Overlay\Tests\Run-All.ps1

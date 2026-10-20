@@ -15,6 +15,7 @@ public sealed class NativeMuteCueRuntime : IDisposable
     internal static readonly string[] VerifiedAudienceActionLabels = ["Mute to Audience"];
 
     private readonly NativeSettingsDocument _settings;
+    private readonly CompatibilityDiagnostics _compatibility;
     private readonly NativeOverlayWindow _overlay;
     private readonly DiscordAuthorizationStore _discordAuthorizationStore = new();
     private readonly DiscordPublicClient _discordPublicClient;
@@ -27,6 +28,7 @@ public sealed class NativeMuteCueRuntime : IDisposable
     private Task<BeacnFaderState[]>? _beacnScan;
     private Task<MixCreateUsbRoute>? _usbRouteDiscovery;
     private MixCreateUsbMonitor? _usbMonitor;
+    private BeacnWinEventProbe? _beacnWinEventProbe;
     private BeacnFaderState[] _beacnStates = [];
     private static readonly DiscordLocalState UnknownDiscordState = new();
     private DiscordLocalState _discordRpcState = new();
@@ -35,7 +37,11 @@ public sealed class NativeMuteCueRuntime : IDisposable
     private DateTime _lastBeacnScanStarted = DateTime.MinValue;
     private DateTime _lastHotkeyReloadUtc = DateTime.MinValue;
     private DateTime _lastUsbDiscoveryStartedUtc = DateTime.MinValue;
+    private DateTime _lastUsbFreeFallbackRefreshUtc = DateTime.MinValue;
+    private int _nextUsbFreeFallbackFaderIndex;
     private DateTime _previewUntilUtc = DateTime.MinValue;
+    private DateTime _lastTraceFlushUtc = DateTime.MinValue;
+    private string _lastTracedBeacnOverlay = string.Empty;
     private long _usbRequestId;
     private long _lastHardwareResultSequence;
     private bool _disposed;
@@ -55,10 +61,12 @@ public sealed class NativeMuteCueRuntime : IDisposable
     public event Action<string>? BeacnStatusChanged;
     public string DiscordConnectionStatus { get; private set; }
     public string BeacnConnectionStatus { get; private set; } = "Discovering the BEACN mixer layout...";
+    internal string CompatibilityStatus => _compatibility.StatusDescription;
 
-    internal NativeMuteCueRuntime(NativeSettingsDocument settings)
+    internal NativeMuteCueRuntime(NativeSettingsDocument settings, CompatibilityDiagnostics compatibility = default)
     {
         _settings = settings;
+        _compatibility = compatibility;
         _discordPublicClient = DiscordPublicClient.Load(System.IO.Path.Combine(AppContext.BaseDirectory, "MuteCue.DiscordPublicClient.json"));
         _discordAuthorization = _discordAuthorizationStore.Load();
         DiscordConnectionStatus = _discordPublicClient.IsAvailable ? "Connect to monitor Discord mute and deafen state." : _discordPublicClient.Detail;
@@ -71,10 +79,23 @@ public sealed class NativeMuteCueRuntime : IDisposable
 
     internal void Start()
     {
+        BeacnTimingTrace.Start(_compatibility.EnableBeacnTiming);
+        if (_compatibility.EnableBeacnWinEvents)
+        {
+            _beacnWinEventProbe = new BeacnWinEventProbe();
+            _ = _beacnWinEventProbe.EnsureStarted();
+        }
         ConfigureBeacnScanner();
-        KeyboardInput.StartMouseListener();
+        BeacnAppScanner.ConfigureEventPrioritizedRefresh(_compatibility.EnableBeacnEventRefresh);
+        if (!_compatibility.DisableGlobalHooks)
+        {
+            KeyboardInput.StartMouseListener();
+        }
         ReloadHotkeyMappings(force: true);
-        StartUsbRouteDiscovery();
+        if (!_compatibility.DisableUsbCapture)
+        {
+            StartUsbRouteDiscovery();
+        }
         if (_discordPublicClient.IsAvailable &&
             (!string.IsNullOrWhiteSpace(_discordAuthorization.AccessToken) || !string.IsNullOrWhiteSpace(_discordAuthorization.RefreshToken)))
         {
@@ -141,13 +162,27 @@ public sealed class NativeMuteCueRuntime : IDisposable
     {
         if (_disposed) return;
         CompleteScans();
+        _ = _beacnWinEventProbe?.EnsureStarted();
+        if (_compatibility.EnableBeacnOutputProbe &&
+            _beacnWinEventProbe?.TryConsumeValueSignal() == true)
+        {
+            BeacnAppScanner.RequestWinEventOutputProbe();
+        }
         ProcessHardwareResult();
         CompleteUsbRouteDiscovery();
         ReloadHotkeyMappings(force: false);
         PublishBeacnStatus();
         ProcessDiscordRpcEvents();
+        ScheduleUsbFreeFallbackRefresh();
         StartDueScans();
         UpdateOverlay();
+        if (BeacnTimingTrace.Enabled &&
+            (DateTime.UtcNow - _lastTraceFlushUtc).TotalSeconds >= 1)
+        {
+            _lastTraceFlushUtc = DateTime.UtcNow;
+            BeacnTimingTrace.Record("scanner", "", $"scanMs={BeacnAppScanner.LastScanMilliseconds:0};pending={BeacnAppScanner.HasPendingChanges};geometrySettling={BeacnAppScanner.GeometryRefreshInProgress};faders={_beacnStates.Length};lastEvent={BeacnAppScanner.LastActionEventSummary}");
+            BeacnTimingTrace.Flush();
+        }
     }
 
     private void CompleteScans()
@@ -156,13 +191,128 @@ public sealed class NativeMuteCueRuntime : IDisposable
         {
             try
             {
+                var previous = _beacnStates;
                 _beacnStates = _beacnScan.GetAwaiter().GetResult().OrderBy(state => state.Order).ToArray();
+                TraceChangedFaderStates(previous, _beacnStates);
                 _hardwareMapper.UpdateStates(_beacnStates);
                 ReconcileBeacnPredictions();
             }
             catch { /* BEACN can rebuild its accessibility tree during a redraw. */ }
             finally { _beacnScan = null; }
         }
+    }
+
+    private static void TraceChangedFaderStates(
+        IReadOnlyList<BeacnFaderState> previous,
+        IReadOnlyList<BeacnFaderState> current)
+    {
+        if (!BeacnTimingTrace.Enabled)
+        {
+            return;
+        }
+
+        foreach (var state in current)
+        {
+            var before = previous.FirstOrDefault(item => string.Equals(
+                item.Name, state.Name, StringComparison.OrdinalIgnoreCase));
+            if (before is null)
+            {
+                continue;
+            }
+
+            if (state.AllActionStateKnown != before.AllActionStateKnown ||
+                (state.AllActionStateKnown && state.AllActionActive != before.AllActionActive))
+            {
+                BeacnTimingTrace.Record("observed-state", state.Name,
+                    $"All={state.AllActionActive};known={state.AllActionStateKnown};revision={state.ActionRevision}");
+            }
+
+            if (state.AudienceActionStateKnown != before.AudienceActionStateKnown ||
+                (state.AudienceActionStateKnown && state.AudienceActionActive != before.AudienceActionActive))
+            {
+                BeacnTimingTrace.Record("observed-state", state.Name,
+                    $"Audience={state.AudienceActionActive};known={state.AudienceActionStateKnown};revision={state.ActionRevision}");
+            }
+        }
+    }
+
+    private void ScheduleUsbFreeFallbackRefresh()
+    {
+        // Dev-only diagnostic: exercise the existing BEACN UI Automation path
+        // without active USB packet capture. Never touches a game process.
+        if (!_compatibility.DisableUsbCapture || !_compatibility.EnableFastBeacnFallback ||
+            _beacnStates.Length == 0)
+        {
+            return;
+        }
+
+        // Never stack diagnostic reads behind an already-running scanner task.
+        if (_beacnScan is not null || BeacnAppScanner.GeometryRefreshInProgress)
+        {
+            return;
+        }
+
+        var selectedFaders = FaderSourceParser.Merge(
+            _settings.GetString("BeacnAllFaderNames", "Mic"),
+            _settings.GetString("BeacnAudienceFaderNames", "Mic"));
+        if (selectedFaders.Count == 0)
+        {
+            return;
+        }
+
+        // Before an event source has been validated, preserve the existing
+        // best-effort sweep. Event-prioritized Dev runs can reconcile more slowly:
+        // BEACN events handle responsive updates, while the sweep recovers missed
+        // notifications without keeping the UIA provider almost continuously busy.
+        var intervalMilliseconds = CalculateUsbFreeFallbackIntervalMilliseconds(
+            selectedFaders.Count, BeacnAppScanner.LastScanMilliseconds,
+            _compatibility.EnableBeacnEventRefresh &&
+            _beacnWinEventProbe?.IsHookAttached == true);
+        var now = DateTime.UtcNow;
+        if ((now - _lastUsbFreeFallbackRefreshUtc).TotalMilliseconds < intervalMilliseconds)
+        {
+            return;
+        }
+
+        // Reconcile one selected fader per interval to avoid an unbounded UIA
+        // storm when users select many sources. Queueing is coalesced by the scanner.
+        for (var attempted = 0; attempted < selectedFaders.Count; attempted++)
+        {
+            var index = _nextUsbFreeFallbackFaderIndex % selectedFaders.Count;
+            _nextUsbFreeFallbackFaderIndex = (index + 1) % selectedFaders.Count;
+            var name = selectedFaders[index];
+            if (!_beacnStates.Any(state => string.Equals(state.Name, name, StringComparison.OrdinalIgnoreCase)))
+            {
+                continue;
+            }
+
+            _lastUsbFreeFallbackRefreshUtc = now;
+            BeacnTimingTrace.Record("probe-queued", name, "All+Audience");
+            BeacnAppScanner.RequestPassiveFaderRefresh(name);
+            break;
+        }
+    }
+
+    internal static double CalculateUsbFreeFallbackIntervalMilliseconds(
+        int selectedFaderCount, double lastScanMilliseconds, bool eventPrioritized = false)
+    {
+        // With the explicit event-guided experiment, only one selected source
+        // is safety-checked about every 1.5 seconds. Across seven faders this
+        // costs less provider time while retaining a bounded ~10.5s sweep.
+        // This is never used unless the new Dev event flag is explicitly set.
+        if (eventPrioritized)
+        {
+            return 1500d;
+        }
+
+        var baseline = Math.Clamp(1000d / Math.Max(1, selectedFaderCount), 125d, 250d);
+        if (!double.IsFinite(lastScanMilliseconds) || lastScanMilliseconds < 0)
+        {
+            return 500d;
+        }
+
+        // Keep provider calls bounded even if the last scan was slow.
+        return Math.Clamp(Math.Max(baseline, lastScanMilliseconds * 2d), baseline, 500d);
     }
 
     private void StartDueScans()
@@ -177,7 +327,7 @@ public sealed class NativeMuteCueRuntime : IDisposable
 
     private void InputTick()
     {
-        while (KeyboardInput.ConsumeLeftClick(out var x, out var y))
+        while (!_compatibility.DisableGlobalHooks && KeyboardInput.ConsumeLeftClick(out var x, out var y))
         {
             var target = BeacnAppScanner.ResolveCachedActionAtPoint(x, y);
             if (target is not null)
@@ -191,10 +341,11 @@ public sealed class NativeMuteCueRuntime : IDisposable
             }
         }
 
-        while (KeyboardInput.ConsumeKeyGesture(out var gestureCode))
+        while (!_compatibility.DisableGlobalHooks && KeyboardInput.ConsumeKeyGesture(out var gestureCode))
         {
             if (_hotkeyBindings.TryGetValue(gestureCode, out var binding))
             {
+                BeacnTimingTrace.Record("hotkey", binding.Name, binding.Mode);
                 RequestRenderedBeacnAction(binding.Name, binding.Mode);
             }
         }
@@ -288,13 +439,16 @@ public sealed class NativeMuteCueRuntime : IDisposable
         _hotkeyBindings = updated;
         if (force || gestureSetChanged)
         {
-            KeyboardInput.StartKeyboardListener(_hotkeyBindings.Keys.ToArray());
+            if (!_compatibility.DisableGlobalHooks)
+            {
+                KeyboardInput.StartKeyboardListener(_hotkeyBindings.Keys.ToArray());
+            }
         }
     }
 
     private void StartUsbRouteDiscovery()
     {
-        if (_disposed || _usbMonitor is not null || _usbRouteDiscovery is not null)
+        if (_disposed || _compatibility.DisableUsbCapture || _usbMonitor is not null || _usbRouteDiscovery is not null)
         {
             return;
         }
@@ -504,12 +658,28 @@ public sealed class NativeMuteCueRuntime : IDisposable
 
     private void UpdateOverlay()
     {
+        if (_compatibility.DisableOverlay)
+        {
+            _overlay.ShowSources([]);
+            return;
+        }
+
         var discordState = _discordRpcStateKnown ? _discordRpcState : UnknownDiscordState;
         var sources = OverlaySourceComposer.Compose(
             _settings,
             GetDisplayedBeacnStates(),
             discordState,
             DateTime.UtcNow < _previewUntilUtc);
+        if (BeacnTimingTrace.Enabled)
+        {
+            var beacnOverlay = string.Join(" | ", sources.Where(
+                source => source.StartsWith("BEACN ", StringComparison.OrdinalIgnoreCase)));
+            if (!string.Equals(_lastTracedBeacnOverlay, beacnOverlay, StringComparison.Ordinal))
+            {
+                _lastTracedBeacnOverlay = beacnOverlay;
+                BeacnTimingTrace.Record("overlay", "", beacnOverlay.Length == 0 ? "clear" : beacnOverlay);
+            }
+        }
         _overlay.ShowSources(sources);
     }
 
@@ -523,6 +693,9 @@ public sealed class NativeMuteCueRuntime : IDisposable
         KeyboardInput.StopKeyboardListener();
         _usbMonitor?.Dispose();
         _usbMonitor = null;
+        _beacnWinEventProbe?.Dispose();
+        _beacnWinEventProbe = null;
+        BeacnTimingTrace.Flush();
         DiscordRpcMonitor.Stop();
         BeacnAppScanner.Shutdown();
         _overlay.Close();
