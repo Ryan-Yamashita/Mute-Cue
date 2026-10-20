@@ -266,7 +266,8 @@ public sealed class NativeMuteCueRuntime : IDisposable
         // notifications without keeping the UIA provider almost continuously busy.
         var intervalMilliseconds = CalculateUsbFreeFallbackIntervalMilliseconds(
             selectedFaders.Count, BeacnAppScanner.LastScanMilliseconds,
-            _compatibility.EnableBeacnEventRefresh);
+            _compatibility.EnableBeacnEventRefresh &&
+            _beacnWinEventProbe?.IsHookAttached == true);
         var now = DateTime.UtcNow;
         if ((now - _lastUsbFreeFallbackRefreshUtc).TotalMilliseconds < intervalMilliseconds)
         {
