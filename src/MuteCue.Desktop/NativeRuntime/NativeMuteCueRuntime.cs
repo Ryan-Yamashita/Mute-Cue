@@ -260,10 +260,13 @@ public sealed class NativeMuteCueRuntime : IDisposable
             return;
         }
 
-        // Target a roughly one-second sweep regardless of how many faders are
-        // selected. Back off if the BEACN accessibility provider is expensive.
+        // Before an event source has been validated, preserve the existing
+        // best-effort sweep. Event-prioritized Dev runs can reconcile more slowly:
+        // BEACN events handle responsive updates, while the sweep recovers missed
+        // notifications without keeping the UIA provider almost continuously busy.
         var intervalMilliseconds = CalculateUsbFreeFallbackIntervalMilliseconds(
-            selectedFaders.Count, BeacnAppScanner.LastScanMilliseconds);
+            selectedFaders.Count, BeacnAppScanner.LastScanMilliseconds,
+            _compatibility.EnableBeacnEventRefresh);
         var now = DateTime.UtcNow;
         if ((now - _lastUsbFreeFallbackRefreshUtc).TotalMilliseconds < intervalMilliseconds)
         {
@@ -289,8 +292,18 @@ public sealed class NativeMuteCueRuntime : IDisposable
         }
     }
 
-    internal static double CalculateUsbFreeFallbackIntervalMilliseconds(int selectedFaderCount, double lastScanMilliseconds)
+    internal static double CalculateUsbFreeFallbackIntervalMilliseconds(
+        int selectedFaderCount, double lastScanMilliseconds, bool eventPrioritized = false)
     {
+        // With the explicit event-guided experiment, only one selected source
+        // is safety-checked about every 1.5 seconds. Across seven faders this
+        // costs less provider time while retaining a bounded ~10.5s sweep.
+        // This is never used unless the new Dev event flag is explicitly set.
+        if (eventPrioritized)
+        {
+            return 1500d;
+        }
+
         var baseline = Math.Clamp(1000d / Math.Max(1, selectedFaderCount), 125d, 250d);
         if (!double.IsFinite(lastScanMilliseconds) || lastScanMilliseconds < 0)
         {
