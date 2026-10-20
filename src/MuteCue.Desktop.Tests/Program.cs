@@ -74,6 +74,11 @@ try
         "The event probe must filter to relevant Windows accessibility notifications.");
     Assert(BeacnWinEventProbe.EventLabel(0x800B) is null,
         "High-frequency position notifications must not enter the timing log.");
+    using (var unattachedBeacnListener = new BeacnWinEventProbe())
+    {
+        Assert(!unattachedBeacnListener.IsHookAttached,
+            "An uninitialized BEACN event listener must not suppress normal fallback polling.");
+    }
     var outputProbe = CompatibilityDiagnostics.FromArguments(
         ["--dev-no-usb-capture", "--dev-fast-beacn-fallback", "--dev-beacn-timing",
          "--dev-beacn-win-events", "--dev-beacn-output-probe"], isDevelopment: true);
