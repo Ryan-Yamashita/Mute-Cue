@@ -155,7 +155,9 @@ enabled to reconcile missed events and unknown states, but is lower priority.
 
 In the event-prioritized Dev mode only, the fallback's periodic UIA action-row
 reconciliation now checks one selected fader **no more frequently than about
-every 1.5 seconds** when no urgent verification is in progress. Previously it
+every 1.5 seconds** when no urgent verification is in progress **and the
+BEACN-only event hook is attached**. If that listener is unavailable, it
+reverts to the earlier faster background fallback. Previously it
 could keep the accessibility worker almost continuously busy with ~300–390 ms
 reads. BEACN-specific events still request immediate targeted, authoritative
 verification; periodic reads are a lower-priority safeguard against missed
