@@ -52,6 +52,10 @@ internal sealed class BeacnWinEventProbe : IDisposable
     private bool _disposed;
     private int _pendingValueSignal;
 
+    // If this BEACN-only hook isn't attached, use the previous faster fallback
+    // so that a failed listener cannot silently degrade mute notification.
+    internal bool IsHookAttached => !_disposed && _hook != IntPtr.Zero;
+
     internal BeacnWinEventProbe()
     {
         // Retaining this delegate for the lifetime of the native hook is required.
